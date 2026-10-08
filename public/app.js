@@ -365,6 +365,7 @@ createApp({
     const tab = ref('add');
     const activeCat = ref('protein');
     const searchQ = ref('');
+    const copyFromDate = ref('');
     const cloudOk = ref(true);
     const cloudMsg = ref('');
     const toastMsg = ref('');
@@ -662,12 +663,22 @@ createApp({
     }
     function setState(foodId, s) { if (draft.value[foodId]) { draft.value[foodId].state = s; draft.value[foodId].confirmed = true; } }
 
+    /* 单条克数防线：数量框误填成 50000 这类荒谬值会让碳水/脂肪瞬间爆表，
+     * 而且极难发现（表现为「新的一天上来就超」）。超过上限直接拦下不让入库。 */
+    const MAX_ITEM_GRAMS = 5000;
+    function guardGrams(g) {
+      const n = Number(g) || 0;
+      if (!(n > 0)) { showToast('请输入有效数量'); return 0; }
+      if (n > MAX_ITEM_GRAMS) { showToast('单条不能超过 ' + MAX_ITEM_GRAMS + ' g（当前 ' + r0(n) + ' g），请检查数量'); return 0; }
+      return r1(n);
+    }
+
     function addItem(foodId, optMeal) {
       const f = foodMap.value[foodId]; if (!f) return;
       const d = draft.value[foodId]; if (!d) return;
       const u = unitOf(f, d.unitKey);
-      const grams = (u.g || 1) * (Number(d.count) || 0);
-      if (!(grams > 0)) { showToast('请输入有效数量'); return; }
+      const grams = guardGrams((u.g || 1) * (Number(d.count) || 0));
+      if (!grams) return;
       const dd = ensureDay();
       const mk = optMeal || safeMealFor(foodId);
       const moved = !optMeal && mk !== meal.value;
@@ -711,8 +722,8 @@ createApp({
     /* 一键补缺口：直接按推荐克数加入当前餐次 */
     function quickAdd(foodId, grams, state) {
       const f = foodMap.value[foodId]; if (!f) return;
-      const g = Number(grams) || 0;
-      if (!(g > 0)) { showToast('克数无效'); return; }
+      const g = guardGrams(grams);
+      if (!g) return;
       const st = state || f.base || 'cooked';
       const mk = safeMealFor(foodId);
       const moved = mk !== meal.value;
@@ -778,10 +789,12 @@ createApp({
           count: isManual(removed) ? r1(removed.grams / (unitOf(f, removed.unitKey).g || 1)) : removed.count,
           confirmed: true
         };
-        searchQ.value = f.name;
       }
       meal.value = removed.meal || meal.value;
       tab.value = 'add';
+      // 注意：这里绝不能把食物名写进 searchQ —— 那会把食物列表永久过滤成 1 项
+      // （表现为「只剩这一条、下面划不动」）。改为滚动定位到该食物。
+      if (f) setTimeout(() => scrollToFood(removed.foodId), 80);
       save();
       showToast('已退回待确认：' + removed.name);
     }
@@ -790,10 +803,11 @@ createApp({
       const ys = ymd(d0);
       const y = logs.value.find(l => l.date === ys && l.user === user.value);
       if (!y || !(y.items || []).length) { showToast('昨天没有记录'); return; }
-      const n = importYesterdayItems(y);
+      const n = importFrom(y);
       showToast('已拉入昨天的 ' + n + ' 项，请逐项确认是否计入');
     }
-    function importYesterdayItems(y) {
+    /* 通用导入：把某一天的记录拉进今天，全部标为待确认（不计入摄入） */
+    function importFrom(y) {
       const dd = ensureDay();
       const itemPrefs = up.value.itemPrefs || (up.value.itemPrefs = {});
       y.items.forEach(i => {
@@ -819,7 +833,7 @@ createApp({
       showToast('已确认计入：' + it.name);
     }
     function bumpGrams(it, delta) {
-      it.grams = Math.max(0, r1((Number(it.grams) || 0) + delta));
+      it.grams = Math.min(MAX_ITEM_GRAMS, Math.max(0, r1((Number(it.grams) || 0) + delta)));
       save(); maybeCheer();
     }
     function moveMeal(it, k) { it.meal = k; save(); showToast('已移到「' + mealName(k) + '」'); }
@@ -855,7 +869,7 @@ createApp({
       // 防护：某些嵌入环境没有 window.confirm，此时直接追加而不中断
       const ask = (typeof window !== 'undefined' && typeof window.confirm === 'function') ? window.confirm : null;
       if (exist > 0 && ask && !ask('今天已有 ' + exist + ' 项记录。\n复制昨日将在其后追加 ' + y.items.length + ' 项，继续？')) return;
-      const n = importYesterdayItems(y);
+      const n = importFrom(y);
       showToast('已复制昨日 ' + n + ' 项，请逐项确认是否计入');
     }
 
@@ -875,6 +889,80 @@ createApp({
       top.sort((a, b) => favSet.indexOf(a.id) - favSet.indexOf(b.id));
       return top.concat(rest);
     });
+    /* 五大类分区展示：一次列出全部食物，按五大类顺序分节，
+     * 用户可自由上下滑动；点分类条滚动到对应分区（不再只显示当前分类那几样）。 */
+    const foodSections = computed(() => {
+      const q = (searchQ.value || '').trim().toLowerCase();
+      const favSet = favs.value;
+      const out = [];
+      (window.CATEGORIES || []).forEach(c => {
+        let list = allFoods.value.filter(f => f.cat === c.key);
+        if (q) list = list.filter(f => f.name.toLowerCase().indexOf(q) >= 0);
+        const top = [], rest = [];
+        list.forEach(f => { (favSet.indexOf(f.id) >= 0 ? top : rest).push(f); });
+        top.sort((a, b) => favSet.indexOf(a.id) - favSet.indexOf(b.id));
+        const items = top.concat(rest);
+        if (items.length) out.push({ key: c.key, name: c.name, icon: c.icon, items: items });
+      });
+      return out;
+    });
+    function scrollToCat(k) {
+      activeCat.value = k;
+      try {
+        const el = document.getElementById('cat-' + k);
+        if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (e) {}
+    }
+    function scrollToFood(id) {
+      try {
+        const el = document.getElementById('food-' + id);
+        if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {}
+    }
+
+    /* ---------- 分项小结卡：点环形卡进入该类今日已摄入，可逐条删除 ---------- */
+    const intakeModal = ref({ visible: false, cat: '' });
+    /* 用 computed 而非打开时的快照：删掉一条后小结卡里要立刻消失 */
+    const intakeItems = computed(() => {
+      const key = intakeModal.value.cat;
+      return countedItems(day.value.items).filter(it => !key || it.cat === key);
+    });
+    const intakeTitle = computed(() => catName(intakeModal.value.cat));
+    function catName(k) {
+      const c = (window.CATEGORIES || []).find(x => x.key === k);
+      return c ? c.name : (k || '全部');
+    }
+    function openIntakeSummary(cat) {
+      const key = (cat === 'kcal' || cat === '') ? '' : cat;
+      intakeModal.value = { visible: true, cat: key };
+    }
+    function closeIntakeSummary() { intakeModal.value.visible = false; }
+    function gotoMealList(cat) {
+      if (cat) activeCat.value = cat;
+      closeIntakeSummary();
+      tab.value = 'list';
+    }
+
+    /* ---------- 补缺口推荐：份量可调 + 可从食物库换一种 ---------- */
+    const fixAdj = ref({});
+    function fixGrams(fx, o) {
+      const k = fx.key + '|' + o.id;
+      const a = fixAdj.value[k];
+      return a === undefined ? o.grams : Math.max(5, a);
+    }
+    function bumpFix(fx, o, d) {
+      const k = fx.key + '|' + o.id;
+      fixAdj.value[k] = Math.max(5, (fixGrams(fx, o) || 0) + d);
+    }
+    function addFix(fx, o) { quickAdd(o.id, fixGrams(fx, o), o.state); }
+    const fixPick = ref({ visible: false, label: '', grams: 100, state: 'cooked', q: '' });
+    function openFixPick(fx) {
+      const o = (fx.options && fx.options[0]) || null;
+      fixPick.value = { visible: true, label: fx.label, grams: o ? o.grams : 100, state: o ? o.state : 'cooked', q: '' };
+    }
+    function closeFixPick() { fixPick.value.visible = false; }
+    function pickFood(f) { quickAdd(f.id, fixPick.value.grams, fixPick.value.state); closeFixPick(); }
+
     const itemsByCat = computed(() => {
       const g = {};
       (window.CATEGORIES || []).forEach(c => { g[c.key] = []; });
@@ -886,7 +974,7 @@ createApp({
     const trendDays = computed(() => {
       const out = [];
       for (let i = 6; i >= 0; i--) {
-        const dt = new Date(dateStr.value); dt.setDate(dt.getDate() - i);
+        const dt = new Date(dateStr.value + 'T00:00:00'); dt.setDate(dt.getDate() - i);
         const ds = ymd(dt);
         const rec = logs.value.find(l => l.date === ds && l.user === user.value);
         let pPct = 0, kPct = 0, has = false;
@@ -962,8 +1050,61 @@ createApp({
     function clearOverride() { ensureDay().targetOverride = null; showOverride.value = false; save(); showToast('已恢复自动计算'); }
 
     /* ---------- 日期 ---------- */
-    function shiftDay(n) { const d = new Date(dateStr.value); d.setDate(d.getDate() + n); dateStr.value = ymd(d); }
+    /* 日期一律按「本地零点」解析：new Date('YYYY-MM-DD') 是 UTC 语义，
+     * 在负偏移时区（如 PDT）会让『下一天』原地不动、『上一天』退两天。 */
+    function shiftDay(n) {
+      const d = new Date(dateStr.value + 'T00:00:00');
+      d.setDate(d.getDate() + n);
+      dateStr.value = ymd(d);
+    }
     function goToday() { dateStr.value = todayStr(); }
+    /* 新的一天 = 干净起点：切日期时清掉搜索词，避免上一天的筛选残留 */
+    function goTodayClean() {
+      dateStr.value = todayStr();
+      searchQ.value = '';
+    }
+
+    /* ---------- 清空今日 ---------- */
+    function clearToday() {
+      const d = ensureDay();
+      const n = (d.items || []).length;
+      if (!n) { showToast('今日本来就是空的'); return; }
+      const ask = (typeof window !== 'undefined' && typeof window.confirm === 'function') ? window.confirm : null;
+      if (ask && !ask('确认清空今日已摄入的 ' + n + ' 项？可用「撤销删除」恢复最近一条。')) return;
+      const removed = d.items.slice();
+      undoStack.value.push({ item: removed[removed.length - 1], idx: d.items.length - 1, date: dateStr.value, user: user.value, t: Date.now() });
+      d.items = [];
+      save();
+      showToast('已清空今日 ' + n + ' 项');
+    }
+
+    /* ---------- 从任意一天复制 ---------- */
+    /* 可选日期：近 30 天里有记录的、且不是今天 */
+    const pastDays = computed(() => {
+      const out = [];
+      const base = new Date(dateStr.value + 'T00:00:00');
+      for (let i = 1; i <= 30; i++) {
+        const d = new Date(base.getTime());
+        d.setDate(d.getDate() - i);
+        const ds = ymd(d);
+        const rec = logs.value.find(l => l.date === ds && l.user === user.value);
+        if (rec && (rec.items || []).length) {
+          out.push({ date: ds, label: ds + '（' + (rec.items || []).length + ' 项）', n: (rec.items || []).length });
+        }
+      }
+      return out;
+    });
+    function copyFrom(ds) {
+      if (!ds) return;
+      const rec = logs.value.find(l => l.date === ds && l.user === user.value);
+      if (!rec || !(rec.items || []).length) { showToast('该日没有记录'); return; }
+      const d = ensureDay();
+      const exist = (d.items || []).length;
+      const ask = (typeof window !== 'undefined' && typeof window.confirm === 'function') ? window.confirm : null;
+      if (exist > 0 && ask && !ask('今天已有 ' + exist + ' 项记录。将追加 ' + rec.items.length + ' 项待确认，继续？')) return;
+      const n = importFrom(rec);
+      showToast('已从 ' + ds + ' 拉入 ' + n + ' 项，请逐项确认是否计入');
+    }
 
     /* ---------- toast ---------- */
     function showToast(m) {
@@ -1187,9 +1328,9 @@ createApp({
 
     return {
       user, users, setUser: (u) => { user.value = u; },
-      dateStr, day, shiftDay, goToday,
+      dateStr, day, shiftDay, goToday, goTodayClean, clearToday, pastDays, copyFrom, importFrom,
       tab, setTab: (t) => { tab.value = t; },
-      activeCat, setCat: (c) => { activeCat.value = c; }, searchQ,
+      activeCat, setCat: (c) => { activeCat.value = c; }, scrollToCat, scrollToFood, searchQ, copyFromDate,
       dayTypes, adjustOptions,
       weight, dayType, adjust,
       targets, refScaled, totals, rings, netCarb, macroSplit, warnings, fixList,
@@ -1197,7 +1338,9 @@ createApp({
       meal, mealList, setMeal, mealRows, mealName, moveMeal,
       trainCfg, periMeals, periMealNames, periWindow, mealTimeOf, setTrainCfg, fmtMin,
       sopItems, toggleSop, sopState: computed(() => day.value.sop || {}),
-      draft, foodsInCat, itemsByCat, allFoods, foodMap,
+      draft, foodsInCat, foodSections, itemsByCat, allFoods, foodMap,
+      intakeModal, intakeItems, intakeTitle, openIntakeSummary, closeIntakeSummary, gotoMealList, catName,
+      fixAdj, fixGrams, bumpFix, addFix, fixPick, openFixPick, closeFixPick, pickFood,
       unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday, confirmImportedItem,
       undoStack, undoDelete, canUndo: computed(() => undoStack.value.length > 0),
       favs, isFav, toggleFav,

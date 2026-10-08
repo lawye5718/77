@@ -91,7 +91,8 @@
 
   <!-- ===================== 环形仪表盘 ===================== -->
   <section class="pd-rings">
-    <div v-for="ring in rings" :key="ring.key" class="pd-ring">
+    <div v-for="ring in rings" :key="ring.key" class="pd-ring" @click="openIntakeSummary(ring.key)"
+         title="点击查看该分项今日已摄入，可逐条删除">
       <div class="pd-ring-svg">
         <svg viewBox="0 0 100 100">
           <circle class="pd-ring-bg" cx="50" cy="50" r="40"></circle>
@@ -134,16 +135,23 @@
   <section v-if="fixList.length" class="pd-fix">
     <div class="pd-warn-title"><i class="fa-solid fa-wand-magic-sparkles"></i> 还差多少 · 换算成具体食物</div>
     <div v-for="fx in fixList" :key="fx.key" class="pd-fix-row">
-      <div class="pd-fix-head">{{ fx.label }} <b>还差 {{ fx.gap }} {{ fx.unit }}</b></div>
-      <div class="pd-fix-opts">
-        <button v-for="o in fx.options" :key="o.id" class="pd-fix-opt"
-                @click="quickAdd(o.id, o.grams, o.state)">
-          <b>{{ o.label }}</b>
-          <span>{{ o.grams }} g · {{ o.kcal }} kcal<template v-if="o.partial"> · 补 {{ o.covers }} {{ fx.unit }}</template></span>
-          <i class="fa-solid fa-plus pd-fix-plus"></i>
-        </button>
+      <div class="pd-fix-head">{{ fx.label }} <b>还差 {{ fx.gap }} {{ fx.unit }}</b>
+        <button class="pd-fix-pick" @click="openFixPick(fx)"><i class="fa-solid fa-book-open"></i> 从食物库挑</button>
       </div>
-      <div class="pd-fix-tip">点一下直接加入「{{ mealName(meal) }}」；缺口过大时按一顿上限给，标「补 X」为这一份的实际贡献</div>
+      <div class="pd-fix-opts">
+        <div v-for="o in fx.options" :key="o.id" class="pd-fix-opt-wrap">
+          <button class="pd-fix-opt" @click="addFix(fx, o)">
+            <b>{{ o.label }}</b>
+            <span>{{ fixGrams(fx, o) }} g · {{ r0(per100Of(o.id, o.state).kcal * fixGrams(fx, o) / 100) }} kcal<template v-if="o.partial"> · 补 {{ o.covers }} {{ fx.unit }}</template></span>
+            <i class="fa-solid fa-plus pd-fix-plus"></i>
+          </button>
+          <div class="pd-fix-step">
+            <button @click.stop="bumpFix(fx, o, -10)">−</button>
+            <button @click.stop="bumpFix(fx, o, 10)">＋</button>
+          </div>
+        </div>
+      </div>
+      <div class="pd-fix-tip">点一下加入「{{ mealName(meal) }}」；± 可改份量，「从食物库挑」可换成别的食物。加入后该食物在下方标色并进入已摄入，不会被删掉。</div>
     </div>
   </section>
 
@@ -182,7 +190,14 @@
       <div class="pd-card-title">今日已摄入（{{ countedItemCount }} 项）
         <small v-if="pendingItemCount">另有 {{ pendingItemCount }} 项待确认</small>
         <button class="pd-yday" @click="pullYesterday()">拉入昨天</button></div>
-      <div v-if="!itemCount" class="pd-meal-empty">暂无，点下方食物的 + 添加</div>
+      <div class="pd-today-ops">
+        <select v-model="copyFromDate" @change="copyFrom(copyFromDate)">
+          <option value="">从某一天复制…</option>
+          <option v-for="p in pastDays" :key="p.date" :value="p.date">{{ p.label }}</option>
+        </select>
+        <button class="pd-clr" @click="clearToday()"><i class="fa-solid fa-eraser"></i> 清空今日</button>
+      </div>
+      <div v-if="!itemCount" class="pd-meal-empty">新的一天从零开始：点下方食物的 + 才会计入</div>
       <div v-for="it in day.items" :key="it.id" class="pd-today-row" :class="{ 'pd-today-pending': it.pendingConfirmation }"
            @click="!it.pendingConfirmation && editItem(it)" :title="it.pendingConfirmation ? '确认后才计入今日摄入' : '点击修改（退回未确认）'">
         <b>{{ it.name }} <em v-if="it.pendingConfirmation">待确认</em></b>
@@ -197,13 +212,17 @@
     <div class="pd-adding">正在录入到 <b>{{ mealName(meal) }}</b></div>
 
     <div class="pd-cats">
-      <button v-for="c in CATEGORIES" :key="c.key" @click="setCat(c.key)" class="pd-cat" :class="{ act: activeCat === c.key }">
+      <button v-for="c in CATEGORIES" :key="c.key" @click="scrollToCat(c.key)" class="pd-cat" :class="{ act: activeCat === c.key }">
         <i class="fa-solid" :class="c.icon"></i> {{ c.name }}
       </button>
     </div>
     <input class="pd-search" v-model="searchQ" placeholder="搜索食物名称…">
 
-    <div v-for="f in foodsInCat" :key="f.id" class="pd-food" :class="{ 'pd-food-in': confirmedFoodIds[f.id] }">
+    <div v-for="sec in foodSections" :key="sec.key" class="pd-food-sec">
+      <div class="pd-sec-title" :id="'cat-' + sec.key">
+        <i class="fa-solid" :class="sec.icon"></i> {{ sec.name }}<span>{{ sec.items.length }} 项</span>
+      </div>
+      <div v-for="f in sec.items" :key="f.id" class="pd-food" :id="'food-' + f.id" :class="{ 'pd-food-in': confirmedFoodIds[f.id] }">
       <div class="pd-food-head">
         <span class="pd-food-name">
           <button class="pd-star" :class="{ on: isFav(f.id) }" @click="toggleFav(f.id)"
@@ -232,7 +251,9 @@
       </div>
       <div v-if="isInsensitive(f.id)" class="pd-food-sub">该食物生熟营养无差异，切换不影响计算</div>
       <div v-else-if="f.note" class="pd-food-sub">{{ f.note }}</div>
+      </div>
     </div>
+    <div v-if="!foodSections.length" class="pd-meal-empty">没有匹配的食物，试试清空搜索词</div>
   </section>
 
   <!-- ---------- 餐次明细 ---------- -->
@@ -584,6 +605,46 @@
       <div class="pd-modal-ops">
         <button class="pd-btn" @click="clearOverride()">清空</button>
         <button class="pd-btn primary" @click="saveOverride()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：分项今日已摄入小结 ===================== -->
+  <div v-if="intakeModal.visible" class="pd-mask" @click.self="closeIntakeSummary()">
+    <div class="pd-modal">
+      <div class="pd-modal-title">{{ intakeTitle }} · 今日已摄入（{{ intakeItems.length }} 项）</div>
+      <div v-if="!intakeItems.length" class="pd-meal-empty">这一分项今天还没有已摄入记录</div>
+      <div v-for="it in intakeItems" :key="it.id" class="pd-intake-row">
+        <div class="pd-intake-main">
+          <b>{{ it.name }}</b>
+          <span>{{ mealName(it.meal) }} · {{ it.grams }} g ·
+            {{ r0(per100Of(it.foodId, it.state).kcal * it.grams / 100) }} kcal<template v-if="it.pendingConfirmation"> · 待确认</template></span>
+        </div>
+        <button class="del" @click="removeItem(it.id)" title="从已摄入中删除"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="pd-modal-ops">
+        <button class="pd-btn" @click="gotoMealList(intakeModal.cat)">去餐次明细</button>
+        <button class="pd-btn primary" @click="closeIntakeSummary()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：从食物库挑食物（补缺口换一种） ===================== -->
+  <div v-if="fixPick.visible" class="pd-mask" @click.self="closeFixPick()">
+    <div class="pd-modal">
+      <div class="pd-modal-title">为「{{ fixPick.label }}」挑一种食物</div>
+      <label class="pd-fld wide"><span>份量 g</span>
+        <input type="number" step="5" inputmode="decimal" v-model.number="fixPick.grams"></label>
+      <input class="pd-search" v-model="fixPick.q" placeholder="搜索食物名称…">
+      <div class="pd-pick-list">
+        <button v-for="f in allFoods.filter(x => !fixPick.q || x.name.toLowerCase().indexOf(fixPick.q.toLowerCase()) >= 0)"
+                :key="f.id" class="pd-pick-item" @click="pickFood(f)">
+          <b>{{ f.name }}</b>
+          <span>蛋白 {{ r1(f.n.p) }} · 脂肪 {{ r1(f.n.f) }} · 碳水 {{ r1(f.n.c) }} · {{ r0(f.n.kcal) }} kcal / 100g</span>
+        </button>
+      </div>
+      <div class="pd-modal-ops">
+        <button class="pd-btn" @click="closeFixPick()">取消</button>
       </div>
     </div>
   </div>

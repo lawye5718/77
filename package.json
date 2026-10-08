@@ -7,7 +7,8 @@
     "validate": "node validate.js",
     "mount": "node mount_test.mjs",
     "live": "node live_check.mjs",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "fixes": "node mount_fixes.mjs"
   },
   "devDependencies": {
     "jsdom": "^26.0.0"
