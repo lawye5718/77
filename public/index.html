@@ -202,7 +202,7 @@
         <select :value="draft[f.id].unitKey" @change="setUnit(f.id, $event.target.value)">
           <option v-for="u in f.units" :key="u.k" :value="u.k">{{ u.label }}</option>
         </select>
-        <input type="number" step="0.5" inputmode="decimal" v-model.number="draft[f.id].count">
+        <input type="number" step="0.5" inputmode="decimal" v-model.number="draft[f.id].count" @input="confirmDraft(f.id)">
         <div class="pd-seg">
           <button :class="{ act: draft[f.id].state === 'raw' }" @click="setState(f.id, 'raw')">生</button>
           <button :class="{ act: draft[f.id].state === 'cooked' }" @click="setState(f.id, 'cooked')">熟</button>
@@ -210,8 +210,9 @@
         <button class="pd-add" @click="addItem(f.id)"><i class="fa-solid fa-plus"></i></button>
       </div>
       <div class="pd-food-hint">
-        = {{ r0(gramsOf(f.id)) }} g · {{ r0(per100Of(f.id, draft[f.id].state).kcal * gramsOf(f.id) / 100) }} kcal
-        · 蛋白 {{ r1(per100Of(f.id, draft[f.id].state).p * gramsOf(f.id) / 100) }} g
+        <template v-if="!draft[f.id].confirmed">默认 {{ draft[f.id].count }} {{ unitLabelOf(f.id) }}（未确认，不计入）</template>
+        <template v-else>= {{ r0(gramsOf(f.id)) }} g · {{ r0(per100Of(f.id, draft[f.id].state).kcal * gramsOf(f.id) / 100) }} kcal
+        · 蛋白 {{ r1(per100Of(f.id, draft[f.id].state).p * gramsOf(f.id) / 100) }} g</template>
       </div>
       <div v-if="isInsensitive(f.id)" class="pd-food-sub">该食物生熟营养无差异，切换不影响计算</div>
       <div v-else-if="f.note" class="pd-food-sub">{{ f.note }}</div>

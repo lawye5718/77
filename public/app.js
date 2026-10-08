@@ -606,7 +606,9 @@ createApp({
     const draft = ref({});
     function initDraft() {
       const d = {};
+      const old = draft.value || {};
       allFoods.value.forEach(f => {
+        if (old[f.id] && old[f.id].confirmed && f.units.some(u => u.k === old[f.id].unitKey)) { d[f.id] = old[f.id]; return; }
         const p = (up.value.itemPrefs || {})[f.id];
         const u0 = (f.units && f.units[0]) || { k: 'g', label: '克', g: 1 };
         const unitKey = p && p.unitKey && f.units.some(u => u.k === p.unitKey) ? p.unitKey : u0.k;
@@ -614,13 +616,16 @@ createApp({
         d[f.id] = {
           unitKey: unitKey,
           count: p && p.count !== undefined ? p.count : (unit.k === 'g' ? 100 : 1),
-          state: (p && p.state) ? p.state : (unit.state || f.base || 'cooked')
+          state: (p && p.state) ? p.state : (unit.state || f.base || 'cooked'),
+          confirmed: false
         };
       });
       draft.value = d;
     }
     initDraft();
-    watch([user, customFoods, overrides], () => initDraft(), { deep: true });
+    watch([user, customFoods, overrides], () => { draft.value = {}; initDraft(); }, { deep: true });
+    /* 默认数量仅作预填；用户修改数量/单位/生熟才算确认，未确认不计入摄入 */
+    function confirmDraft(foodId) { if (draft.value[foodId]) draft.value[foodId].confirmed = true; }
 
     function unitOf(food, unitKey) {
       return (food.units || []).find(u => u.k === unitKey) || (food.units || [])[0] || { k: 'g', label: '克', g: 1 };
@@ -628,21 +633,24 @@ createApp({
     function gramsOf(foodId) {
       const f = foodMap.value[foodId]; if (!f) return 0;
       const d = draft.value[foodId]; if (!d) return 0;
+      if (!d.confirmed) return 0;
       return (unitOf(f, d.unitKey).g || 1) * (Number(d.count) || 0);
     }
+    function unitLabelOf(foodId) { const f = foodMap.value[foodId]; const d = draft.value[foodId]; return f && d ? unitOf(f, d.unitKey).label : ''; }
     function setUnit(foodId, k) {
       const f = foodMap.value[foodId]; const d = draft.value[foodId];
       if (!f || !d) return;
-      d.unitKey = k;
+      d.unitKey = k; d.confirmed = true;
       const u = unitOf(f, k);
       if (u.state) d.state = u.state;
       if (d.count === undefined || d.count === 0) d.count = u.k === 'g' ? 100 : 1;
     }
-    function setState(foodId, s) { if (draft.value[foodId]) draft.value[foodId].state = s; }
+    function setState(foodId, s) { if (draft.value[foodId]) { draft.value[foodId].state = s; draft.value[foodId].confirmed = true; } }
 
     function addItem(foodId, optMeal) {
       const f = foodMap.value[foodId]; if (!f) return;
       const d = draft.value[foodId]; if (!d) return;
+      if (!d.confirmed) { showToast('请先确认数量（默认值不会自动计入）'); return; }
       const u = unitOf(f, d.unitKey);
       const grams = (u.g || 1) * (Number(d.count) || 0);
       if (!(grams > 0)) { showToast('请输入有效数量'); return; }
@@ -658,6 +666,7 @@ createApp({
       });
       up.value.itemPrefs = up.value.itemPrefs || {};
       up.value.itemPrefs[foodId] = { unitKey: d.unitKey, count: Number(d.count) || 0, state: d.state };
+      d.confirmed = false;
       save();
       maybeCheer();
       showToast(moved
@@ -1116,7 +1125,7 @@ createApp({
       trainCfg, periMeals, periMealNames, periWindow, mealTimeOf, setTrainCfg, fmtMin,
       sopItems, toggleSop, sopState: computed(() => day.value.sop || {}),
       draft, foodsInCat, itemsByCat, allFoods, foodMap,
-      unitOf, gramsOf, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd,
+      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd,
       undoStack, undoDelete, canUndo: computed(() => undoStack.value.length > 0),
       favs, isFav, toggleFav,
       yesterday, canCopy, copyMsg, copyYesterday,
