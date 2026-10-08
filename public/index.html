@@ -24,7 +24,7 @@
     <div class="pd-row">
       <div class="pd-user">
         <button v-for="u in users" :key="u" @click="setUser(u)" class="pd-avatar-btn" :class="{ act: user === u }">
-          <img :src="avatarOf(u)" @error="$event.target.src = avatarOf(u)" alt="">
+          <img :src="avatarOf(u)" @error="$event.target.src = DEFAULT_AVATARS[u]" alt="">
           <span>{{ u }}</span>
         </button>
       </div>
@@ -178,6 +178,16 @@
         <i class="fa-solid" :class="m.icon"></i> {{ m.name }}
       </button>
     </div>
+    <div class="pd-card pd-today-card">
+      <div class="pd-card-title">今日已摄入（{{ itemCount }} 项）
+        <button class="pd-yday" @click="pullYesterday()">拉入昨天</button></div>
+      <div v-if="!itemCount" class="pd-meal-empty">暂无，点下方食物的 + 添加</div>
+      <div v-for="it in day.items" :key="it.id" class="pd-today-row" @click="editItem(it)" title="点击修改（退回未确认）">
+        <b>{{ it.name }}</b>
+        <span>{{ isManual(it) ? '手动调整' : it.count + ' ' + it.unitLabel }} · {{ it.grams }} g</span>
+        <button class="del" @click.stop="removeItem(it.id)"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    </div>
     <div class="pd-adding">正在录入到 <b>{{ mealName(meal) }}</b></div>
 
     <div class="pd-cats">
@@ -187,7 +197,7 @@
     </div>
     <input class="pd-search" v-model="searchQ" placeholder="搜索食物名称…">
 
-    <div v-for="f in foodsInCat" :key="f.id" class="pd-food">
+    <div v-for="f in foodsInCat" :key="f.id" class="pd-food" :class="{ 'pd-food-in': confirmedFoodIds[f.id] }">
       <div class="pd-food-head">
         <span class="pd-food-name">
           <button class="pd-star" :class="{ on: isFav(f.id) }" @click="toggleFav(f.id)"
@@ -236,7 +246,7 @@
       <div v-for="it in mr.items" :key="it.id" class="pd-item">
         <div class="pd-item-main">
           <b>{{ it.name }}</b>
-          <span>{{ it.count }} {{ it.unitLabel }} · {{ it.grams }} g · {{ it.state === 'raw' ? '生重' : '熟重' }}</span>
+          <span><template v-if="isManual(it)">手动调整</template><template v-else>{{ it.count }} {{ it.unitLabel }}</template> · {{ it.grams }} g · {{ it.state === 'raw' ? '生重' : '熟重' }}</span>
         </div>
         <div class="pd-item-kcal">{{ r0(per100Of(it.foodId, it.state).kcal * it.grams / 100) }} kcal</div>
         <select class="pd-item-meal" :value="it.meal" @change="moveMeal(it, $event.target.value)">

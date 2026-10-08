@@ -102,11 +102,11 @@ function buildTargets(weight, dayType, adjustPct, override) {
   let delta = targetKcal - baseKcal;
   let unmet = 0;
   if (delta < -0.5) {
-    const cut = Math.min(carb - carbFloor, (-delta) / 4); carb -= cut; delta += cut * 4;
+    const cut = Math.min(Math.max(0, carb - carbFloor), (-delta) / 4); carb -= cut; delta += cut * 4;
     if (delta < -0.5) { const cf = Math.min(fat - fatFloor, (-delta) / 9); fat -= cf; delta += cf * 9; }
     unmet = -delta;
   } else if (delta > 0.5) {
-    const add = Math.min(carbCeil - carb, delta / 4); carb += add; delta -= add * 4;
+    const add = Math.min(Math.max(0, carbCeil - carb), delta / 4); carb += add; delta -= add * 4;
     if (delta > 0.5) { const af = Math.min(fatCeil - fat, delta / 9); fat += af; delta -= af * 9; }
     unmet = delta;
   }
@@ -584,7 +584,7 @@ createApp({
       const hi = e + c.postHours * 60;
       const inWin = (t) => t !== null && (t >= lo || t - 1440 >= lo) && (t <= hi || t - 1440 <= hi);
       // 跨零点：把时间统一到以训练开始为基准的相对轴
-      const rel = (t) => { let v = t; if (v < s - 720) v += 1440; return v; };
+      const rel = (t) => { let v = t; if (v - s > 720) v -= 1440; if (s - v > 720) v += 1440; return v; };
       const out = [];
       (window.MEALS || []).forEach(m => {
         const t = mealTimeOf(m.k);
@@ -662,7 +662,6 @@ createApp({
     function addItem(foodId, optMeal) {
       const f = foodMap.value[foodId]; if (!f) return;
       const d = draft.value[foodId]; if (!d) return;
-      if (!d.confirmed) { showToast('请先确认数量（默认值不会自动计入）'); return; }
       const u = unitOf(f, d.unitKey);
       const grams = (u.g || 1) * (Number(d.count) || 0);
       if (!(grams > 0)) { showToast('请输入有效数量'); return; }
@@ -754,6 +753,45 @@ createApp({
       save();
       showToast('已恢复 ' + last.item.name);
     }
+    const isManual = (it) => {
+      const f = foodMap.value[it.foodId];
+      const u = f ? (f.units || []).find(x => x.k === it.unitKey) : null;
+      const unitG = u ? (u.g || 1) : null;
+      if (unitG === null) return false;
+      return Math.abs((Number(it.grams) || 0) - unitG * (Number(it.count) || 0)) > 0.05;
+    };
+    const confirmedFoodIds = computed(() => {
+      const s = {}; (day.value.items || []).forEach(i => { s[i.foodId] = true; }); return s;
+    });
+    function editItem(it) {
+      const d = ensureDay();
+      const idx = d.items.findIndex(x => x.id === it.id);
+      if (idx < 0) return;
+      const removed = d.items.splice(idx, 1)[0];
+      const f = foodMap.value[removed.foodId];
+      if (f) {
+        draft.value[removed.foodId] = {
+          unitKey: removed.unitKey, state: removed.state,
+          count: isManual(removed) ? r1(removed.grams / (unitOf(f, removed.unitKey).g || 1)) : removed.count,
+          confirmed: true
+        };
+        searchQ.value = f.name;
+      }
+      meal.value = removed.meal || meal.value;
+      tab.value = 'add';
+      save();
+      showToast('已退回待确认：' + removed.name);
+    }
+    function pullYesterday() {
+      const d0 = new Date(dateStr.value + 'T00:00:00'); d0.setDate(d0.getDate() - 1);
+      const ys = ymd(d0);
+      const y = logs.value.find(l => l.date === ys && l.user === user.value);
+      if (!y || !(y.items || []).length) { showToast('昨天没有记录'); return; }
+      const dd = ensureDay();
+      y.items.forEach(i => dd.items.push(Object.assign({}, i, { id: uid(), ts: Date.now() })));
+      save();
+      showToast('已拉入昨天的 ' + y.items.length + ' 项');
+    }
     function bumpGrams(it, delta) {
       it.grams = Math.max(0, r1((Number(it.grams) || 0) + delta));
       save(); maybeCheer();
@@ -774,7 +812,7 @@ createApp({
 
     /* ---------- 复制昨日 ---------- */
     const yesterday = computed(() => {
-      const d = new Date(dateStr.value); d.setDate(d.getDate() - 1);
+      const d = new Date(dateStr.value + 'T00:00:00'); d.setDate(d.getDate() - 1);
       return logs.value.find(l => l.date === ymd(d) && l.user === user.value);
     });
     const canCopy = computed(() => !!(yesterday.value && yesterday.value.items && yesterday.value.items.length));
@@ -1022,7 +1060,7 @@ createApp({
       if (!file) return;
       const isVid = /^video\//.test(file.type) || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
       const isMp4 = /^video\/mp4$/i.test(file.type) || /\.(mp4|m4v|mov)$/i.test(file.name);
-      if (file.size > 20 * 1024 * 1024) { showToast('超过 20 MB，请换小一点'); e.target.value = ''; return; }
+      if (file.size > 3 * 1024 * 1024) { showToast('超过 3 MB，请换小一点'); e.target.value = ''; return; }
       const raw = await readFile(file);
       if (!raw) { showToast('读取失败'); e.target.value = ''; return; }
       cheerMediaModal.value.tempUrl = raw;
@@ -1137,7 +1175,7 @@ createApp({
       trainCfg, periMeals, periMealNames, periWindow, mealTimeOf, setTrainCfg, fmtMin,
       sopItems, toggleSop, sopState: computed(() => day.value.sop || {}),
       draft, foodsInCat, itemsByCat, allFoods, foodMap,
-      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd,
+      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday,
       undoStack, undoDelete, canUndo: computed(() => undoStack.value.length > 0),
       favs, isFav, toggleFav,
       yesterday, canCopy, copyMsg, copyYesterday,
