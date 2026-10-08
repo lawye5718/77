@@ -477,9 +477,35 @@ try {
   R.dateStr.value = c.todayStr();
   if (!R.canCopy.value) bad('应能检测到昨日记录');
   else ok('检测到昨日 ' + yCount + ' 项记录，可一键复制');
+  const totalsBeforeImport = R.totals.value.kcal;
+  const countedBeforeImport = R.countedItemCount.value;
   R.copyYesterday();
-  if (R.itemCount.value < yCount) bad('复制昨日失败');
-  else ok('复制昨日 → 今日新增 ' + yCount + ' 项（提示语：' + R.copyMsg.value + '）');
+  const imported = R.day.value.items.find(i => i.pendingConfirmation);
+  if (R.itemCount.value < yCount || !imported) bad('复制昨日失败或未标记待确认');
+  else ok('复制昨日 → 今日新增 ' + yCount + ' 项待确认条目');
+  if (R.countedItemCount.value !== countedBeforeImport || R.totals.value.kcal !== totalsBeforeImport)
+    bad('未确认的昨日条目计入了今日汇总');
+  else ok('未确认的昨日条目不计入今日汇总');
+  if (imported && (R.draft.value.salmon.unitKey !== 'block' || R.draft.value.salmon.count !== imported.count))
+    bad('导入食物没有同步为今日默认值模板');
+  else if (imported) ok('导入食物的单位和数量已同步为今日默认值');
+  if (imported) {
+    R.confirmImportedItem(imported.id);
+    if (R.pendingItemCount.value !== 0 || R.countedItemCount.value !== countedBeforeImport + 1 || R.totals.value.kcal <= totalsBeforeImport)
+      bad('逐项确认后未计入今日汇总');
+    else ok('逐项确认后立即计入今日汇总');
+  }
+  R.pullYesterday();
+  const denied = R.day.value.items.find(i => i.pendingConfirmation);
+  const countBeforeDeny = R.itemCount.value;
+  const totalsBeforeDeny = R.totals.value.kcal;
+  if (!denied) bad('拉入昨天未生成待确认条目');
+  else {
+    R.removeItem(denied.id);
+    if (R.itemCount.value !== countBeforeDeny - 1 || R.pendingItemCount.value !== 0 || R.totals.value.kcal !== totalsBeforeDeny)
+      bad('拒绝导入条目后未从今日小结移除');
+    else ok('拒绝导入条目后立即从今日小结移除');
+  }
 
   // 补缺口建议
   R.setMeal('lunch');

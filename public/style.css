@@ -482,4 +482,8 @@ input, select, textarea { font-size: 16px !important; }
 .pd-food-in { background: #e6f6ea; border-color: #34a853; }
 .pd-today-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; cursor: pointer; border-top: 1px solid var(--pd-bd); }
 .pd-today-row span { flex: 1; text-align: right; font-size: 12px; opacity: .8; }
+.pd-today-pending { opacity: .75; }
+.pd-today-row em { color: #b45309; font-size: 11px; font-style: normal; }
+.pd-import-action { padding: 4px 7px; font-size: 11px; white-space: nowrap; }
+.pd-import-confirm { color: #15803d; }
 .pd-yday { float: right; font-size: 12px; }

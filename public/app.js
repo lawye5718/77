@@ -520,7 +520,7 @@ createApp({
       ];
     });
 
-    const warnings = computed(() => buildWarnings(totals.value, targets.value, dayType.value, (day.value.items || []).filter(i => !i.pendingConfirmation), foodMap.value, built.value.unmet, periMeals.value));
+    const warnings = computed(() => buildWarnings(totals.value, targets.value, dayType.value, countedItems(day.value.items), foodMap.value, built.value.unmet, periMeals.value));
     const fixList = computed(() => fixSuggestions(totals.value, targets.value, dayType.value, foodMap.value, meal.value));
 
     /* ---------- 餐次 ---------- */
@@ -764,7 +764,7 @@ createApp({
       return Math.abs((Number(it.grams) || 0) - unitG * (Number(it.count) || 0)) > 0.05;
     };
     const confirmedFoodIds = computed(() => {
-      const s = {}; (day.value.items || []).forEach(i => { s[i.foodId] = true; }); return s;
+      const s = {}; countedItems(day.value.items).forEach(i => { s[i.foodId] = true; }); return s;
     });
     function editItem(it) {
       const d = ensureDay();
@@ -1208,8 +1208,8 @@ createApp({
       hasOverride: computed(() => !!(day.value && day.value.targetOverride)),
       cloudOk, cloudMsg, toastMsg,
       itemCount: computed(() => (day.value.items || []).length),
-      countedItemCount: computed(() => (day.value.items || []).filter(i => !i.pendingConfirmation).length),
-      pendingItemCount: computed(() => (day.value.items || []).filter(i => i.pendingConfirmation).length),
+      countedItemCount: computed(() => countedItems(day.value.items).length),
+      pendingItemCount: computed(() => (day.value.items || []).filter(i => i && i.pendingConfirmation).length),
       baseKcal: computed(() => built.value.baseKcal),
       unmetKcal: computed(() => built.value.unmet),
       exportJson,
