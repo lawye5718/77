@@ -1164,7 +1164,7 @@ createApp({
 
     return {
       user, users, setUser: (u) => { user.value = u; },
-      dateStr, shiftDay, goToday,
+      dateStr, day, shiftDay, goToday,
       tab, setTab: (t) => { tab.value = t; },
       activeCat, setCat: (c) => { activeCat.value = c; }, searchQ,
       dayTypes, adjustOptions,

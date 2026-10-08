@@ -467,7 +467,7 @@ try {
 
   // 复制昨日
   const ymdN = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  const ymdOf = (ds) => { const d = new Date(ds); d.setDate(d.getDate() - 1); return ymdN(d); };
+  const ymdOf = (ds) => { const d = new Date(ds + 'T00:00:00'); d.setDate(d.getDate() - 1); return ymdN(d); };
   const yesterdayDate = ymdOf(R.dateStr.value);
   R.dateStr.value = yesterdayDate;
   R.draft.value['salmon'] = { unitKey: 'block', count: 1, state: 'raw', confirmed: true };
