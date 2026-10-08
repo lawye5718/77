@@ -55,10 +55,18 @@ function makeFoodIndex(customFoods, overrides) {
 /* ---------- 每 100g 营养（按状态推导） ---------- */
 function per100(food, state) {
   if (!food) return { p: 0, f: 0, c: 0, fiber: 0, kcal: 0 };
-  const y = food.yield || 1;
-  if (state === food.base || y === 1) return food.n;
-  const factor = food.base === 'raw' ? (1 / y) : y;
-  const n = food.n;
+  const source = food.n && typeof food.n === 'object' ? food.n : {};
+  const n = {};
+  ['p', 'f', 'c', 'fiber', 'kcal'].forEach(k => {
+    const value = Number(source[k]);
+    n[k] = Number.isFinite(value) && value >= 0 ? value : 0;
+  });
+  const base = food.base === 'raw' ? 'raw' : 'cooked';
+  const requestedState = state === 'raw' || state === 'cooked' ? state : base;
+  const ratio = Number(food.yield);
+  const y = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  if (requestedState === base || y === 1) return n;
+  const factor = base === 'raw' ? (1 / y) : y;
   return { p: n.p * factor, f: n.f * factor, c: n.c * factor, fiber: n.fiber * factor, kcal: n.kcal * factor };
 }
 
@@ -139,16 +147,19 @@ function buildTargets(weight, dayType, adjustPct, override) {
 function sumItems(items, foodMap) {
   const s = { p: 0, f: 0, c: 0, fiber: 0, kcal: 0, vege: 0, fruit: 0, nut: 0, grams: 0 };
   (items || []).forEach(it => {
-    const food = foodMap[it.foodId];
+    if (!it || typeof it !== 'object') return;
+    const food = (foodMap || {})[it.foodId];
     const n = per100(food, it.state);
-    const g = Number(it.grams) || 0;
+    const grams = Number(it.grams);
+    const g = Number.isFinite(grams) && grams > 0 ? grams : 0;
     const k = g / 100;
     s.p += n.p * k; s.f += n.f * k; s.c += n.c * k; s.fiber += n.fiber * k; s.kcal += n.kcal * k;
     s.grams += g;
     if (food) {
-      if (food.cat === 'vege') s.vege += g;
-      else if (food.cat === 'fruit') s.fruit += g;
-      else if (food.cat === 'nut') s.nut += g;
+      const cat = food.cat || it.cat;
+      if (cat === 'vege') s.vege += g;
+      else if (cat === 'fruit') s.fruit += g;
+      else if (cat === 'nut') s.nut += g;
     }
   });
   s.netC = Math.max(0, s.c - s.fiber);
@@ -246,7 +257,7 @@ function buildWarnings(totals, t, dayType, items, foodMap, unmet, periMeals) {
 }
 
 /* ---------- 补缺口建议：把「还差 X g」换算成具体食物 ---------- */
-function fixSuggestions(totals, t, dayType, foodMap) {
+function fixSuggestions(totals, t, dayType, foodMap, mealKey) {
   const isRest = dayType === 'rest';
   const out = [];
   const FX = window.FIX_SUGGEST || {};
@@ -257,6 +268,7 @@ function fixSuggestions(totals, t, dayType, foodMap) {
       const f = foodMap[s.id]; if (!f) return false;
       if (s.restOnly && !isRest) return false;   // 仅休息日适用
       if (s.trainOnly && isRest) return false;   // 仅训练日适用（围训练期补剂）
+      if (mealKey && s.fit && s.fit.indexOf(mealKey) < 0) return false;
       // awayOnly（可见脂肪）：训练日仍可推荐，由 addItem 自动避开练前/练后餐次
       return true;
     });
@@ -266,7 +278,7 @@ function fixSuggestions(totals, t, dayType, foodMap) {
     const mk = (s) => {
       const f = foodMap[s.id];
       const n = per100(f, f.base);
-      const per = n[nk];
+      const per = key === 'vege' ? 100 : n[nk];
       if (!(per > 0)) return null;
       const need = Math.round(gap / per * 100 / 10) * 10;
       // 一顿吃不完就按上限给，并标明这一份实际能补多少
@@ -506,7 +518,7 @@ createApp({
     });
 
     const warnings = computed(() => buildWarnings(totals.value, targets.value, dayType.value, day.value.items, foodMap.value, built.value.unmet, periMeals.value));
-    const fixList = computed(() => fixSuggestions(totals.value, targets.value, dayType.value, foodMap.value));
+    const fixList = computed(() => fixSuggestions(totals.value, targets.value, dayType.value, foodMap.value, meal.value));
 
     /* ---------- 餐次 ---------- */
     function inferMeal() {
