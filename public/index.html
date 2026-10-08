@@ -179,12 +179,18 @@
       </button>
     </div>
     <div class="pd-card pd-today-card">
-      <div class="pd-card-title">今日已摄入（{{ itemCount }} 项）
+      <div class="pd-card-title">今日已摄入（{{ countedItemCount }} 项）
+        <small v-if="pendingItemCount">另有 {{ pendingItemCount }} 项待确认</small>
         <button class="pd-yday" @click="pullYesterday()">拉入昨天</button></div>
       <div v-if="!itemCount" class="pd-meal-empty">暂无，点下方食物的 + 添加</div>
-      <div v-for="it in day.items" :key="it.id" class="pd-today-row" @click="editItem(it)" title="点击修改（退回未确认）">
-        <b>{{ it.name }}</b>
+      <div v-for="it in day.items" :key="it.id" class="pd-today-row" :class="{ 'pd-today-pending': it.pendingConfirmation }"
+           @click="!it.pendingConfirmation && editItem(it)" :title="it.pendingConfirmation ? '确认后才计入今日摄入' : '点击修改（退回未确认）'">
+        <b>{{ it.name }} <em v-if="it.pendingConfirmation">待确认</em></b>
         <span>{{ isManual(it) ? '手动调整' : it.count + ' ' + it.unitLabel }} · {{ it.grams }} g</span>
+        <template v-if="it.pendingConfirmation">
+          <button class="pd-import-action pd-import-confirm" @click.stop="confirmImportedItem(it.id)">确认计入</button>
+          <button class="pd-import-action" @click.stop="removeItem(it.id)">不计入</button>
+        </template>
         <button class="del" @click.stop="removeItem(it.id)"><i class="fa-solid fa-xmark"></i></button>
       </div>
     </div>
