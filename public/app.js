@@ -144,10 +144,13 @@ function buildTargets(weight, dayType, adjustPct, override) {
 }
 
 /* ---------- 汇总 ---------- */
+function countedItems(items) {
+  return (items || []).filter(it => it && !it.pendingConfirmation);
+}
 function sumItems(items, foodMap) {
   const s = { p: 0, f: 0, c: 0, fiber: 0, kcal: 0, vege: 0, fruit: 0, nut: 0, grams: 0 };
-  (items || []).forEach(it => {
-    if (!it || typeof it !== 'object') return;
+  countedItems(items).forEach(it => {
+    if (typeof it !== 'object') return;
     const food = (foodMap || {})[it.foodId];
     const n = per100(food, it.state);
     const grams = Number(it.grams);
@@ -172,7 +175,7 @@ function mealBreakdown(items, foodMap, dayType) {
   const isRest = dayType === 'rest';
   const list = meals.filter(m => !(isRest && m.trainOnly));
   const out = list.map(m => {
-    const its = (items || []).filter(i => i.meal === m.k);
+    const its = (items || []).filter(i => i.meal === m.k && !i.pendingConfirmation);
     const s = sumItems(its, foodMap);
     return {
       k: m.k, name: m.name, icon: m.icon,
@@ -517,7 +520,7 @@ createApp({
       ];
     });
 
-    const warnings = computed(() => buildWarnings(totals.value, targets.value, dayType.value, day.value.items, foodMap.value, built.value.unmet, periMeals.value));
+    const warnings = computed(() => buildWarnings(totals.value, targets.value, dayType.value, (day.value.items || []).filter(i => !i.pendingConfirmation), foodMap.value, built.value.unmet, periMeals.value));
     const fixList = computed(() => fixSuggestions(totals.value, targets.value, dayType.value, foodMap.value, meal.value));
 
     /* ---------- 餐次 ---------- */
@@ -787,10 +790,33 @@ createApp({
       const ys = ymd(d0);
       const y = logs.value.find(l => l.date === ys && l.user === user.value);
       if (!y || !(y.items || []).length) { showToast('昨天没有记录'); return; }
+      const n = importYesterdayItems(y);
+      showToast('已拉入昨天的 ' + n + ' 项，请逐项确认是否计入');
+    }
+    function importYesterdayItems(y) {
       const dd = ensureDay();
-      y.items.forEach(i => dd.items.push(Object.assign({}, i, { id: uid(), ts: Date.now() })));
+      const itemPrefs = up.value.itemPrefs || (up.value.itemPrefs = {});
+      y.items.forEach(i => {
+        const copied = Object.assign({}, i, { id: uid(), ts: Date.now(), pendingConfirmation: true });
+        dd.items.push(copied);
+        const manual = isManual(i);
+        itemPrefs[i.foodId] = {
+          unitKey: manual ? 'g' : (i.unitKey || 'g'),
+          count: manual ? i.grams : i.count,
+          state: i.state
+        };
+      });
+      initDraft();
       save();
-      showToast('已拉入昨天的 ' + y.items.length + ' 项');
+      return y.items.length;
+    }
+    function confirmImportedItem(id) {
+      const it = (day.value.items || []).find(i => i.id === id && i.pendingConfirmation);
+      if (!it) return;
+      delete it.pendingConfirmation;
+      save();
+      maybeCheer();
+      showToast('已确认计入：' + it.name);
     }
     function bumpGrams(it, delta) {
       it.grams = Math.max(0, r1((Number(it.grams) || 0) + delta));
@@ -829,12 +855,8 @@ createApp({
       // 防护：某些嵌入环境没有 window.confirm，此时直接追加而不中断
       const ask = (typeof window !== 'undefined' && typeof window.confirm === 'function') ? window.confirm : null;
       if (exist > 0 && ask && !ask('今天已有 ' + exist + ' 项记录。\n复制昨日将在其后追加 ' + y.items.length + ' 项，继续？')) return;
-      y.items.forEach(it => {
-        d.items.push(Object.assign({}, it, { id: uid(), ts: Date.now() }));
-      });
-      save();
-      showToast('已复制昨日 ' + y.items.length + ' 项');
-      maybeCheer();
+      const n = importYesterdayItems(y);
+      showToast('已复制昨日 ' + n + ' 项，请逐项确认是否计入');
     }
 
     /* ---------- 列表筛选 ---------- */
@@ -868,9 +890,10 @@ createApp({
         const ds = ymd(dt);
         const rec = logs.value.find(l => l.date === ds && l.user === user.value);
         let pPct = 0, kPct = 0, has = false;
-        if (rec && rec.items && rec.items.length) {
+        const items = countedItems(rec && rec.items);
+        if (items.length) {
           const b = buildTargets(rec.weight || up.value.weight, rec.dayType || 'lower', rec.adjust || 0, rec.targetOverride);
-          const s = sumItems(rec.items, foodMap.value);
+          const s = sumItems(items, foodMap.value);
           pPct = Math.round(s.p / b.t.protein * 100);
           kPct = Math.round(s.kcal / b.t.kcal * 100);
           has = true;
@@ -1175,7 +1198,7 @@ createApp({
       trainCfg, periMeals, periMealNames, periWindow, mealTimeOf, setTrainCfg, fmtMin,
       sopItems, toggleSop, sopState: computed(() => day.value.sop || {}),
       draft, foodsInCat, itemsByCat, allFoods, foodMap,
-      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday,
+      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday, confirmImportedItem,
       undoStack, undoDelete, canUndo: computed(() => undoStack.value.length > 0),
       favs, isFav, toggleFav,
       yesterday, canCopy, copyMsg, copyYesterday,
@@ -1185,6 +1208,8 @@ createApp({
       hasOverride: computed(() => !!(day.value && day.value.targetOverride)),
       cloudOk, cloudMsg, toastMsg,
       itemCount: computed(() => (day.value.items || []).length),
+      countedItemCount: computed(() => (day.value.items || []).filter(i => !i.pendingConfirmation).length),
+      pendingItemCount: computed(() => (day.value.items || []).filter(i => i.pendingConfirmation).length),
       baseKcal: computed(() => built.value.baseKcal),
       unmetKcal: computed(() => built.value.unmet),
       exportJson,
