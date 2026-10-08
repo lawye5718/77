@@ -321,7 +321,7 @@ try {
   const c1 = mkCtx(); c1.globalThis = c1;
   vm.runInContext(appSrc.replace(MARKER, stubs), c1);
   const r1 = c1.__CAP.setup();
-  r1.draft.value['salmon'] = { unitKey: 'block', count: 2, state: 'raw' };
+  r1.draft.value['salmon'] = { unitKey: 'block', count: 2, state: 'raw', confirmed: true };
   r1.addItem('salmon');
   const it = r1.itemsByCat.value.protein[0];
   if (!it) bad('录入后未生成条目');
@@ -341,6 +341,13 @@ try {
     bad('默认值未沿用上次记录: ' + JSON.stringify(d2));
   else ok('重开后默认值 = 上次记录（块 / 2 / 生重）——「全局默认取上一次」生效');
 
+  // 未确认的默认数量不得计入摄入
+  { const before = r2.itemCount.value;
+    if (r2.gramsOf('salmon') !== 0 && !r2.draft.value['salmon'].confirmed) bad('未确认默认值仍被计算');
+    r2.addItem('salmon');
+    if (r2.itemCount.value !== before) bad('未确认的默认数量被直接录入');
+    else ok('默认数量未确认 → 不计入当日摄入'); }
+
   // 换算提示：改单位为「克」后克数应变为 count 值
   r2.setUnit('salmon', 'g');
   r2.draft.value['salmon'].count = 150;
@@ -354,7 +361,7 @@ try {
 
   // 禁区：训练日把可见脂肪录入到「练后」餐次 → 报红
   r2.meal.value = 'post';
-  r2.draft.value['almond'] = { unitKey: 'spoon', count: 1, state: 'cooked' };
+  r2.draft.value['almond'] = { unitKey: 'spoon', count: 1, state: 'cooked', confirmed: true };
   r2.addItem('almond', 'post');
   const w2 = r2.warnings.value;
   if (!w2.some(x => x.lv === 'red' && x.t.indexOf('可见脂肪') >= 0)) bad('练后餐次加坚果应触发红色预警');
@@ -363,7 +370,7 @@ try {
   // 餐次保护：当前餐次是 post 时，可见脂肪应被自动改派到非围训练期餐次
   r2.dateStr.value = '2030-01-02';
   r2.meal.value = 'post';
-  r2.draft.value['almond'] = { unitKey: 'spoon', count: 1, state: 'cooked' };
+  r2.draft.value['almond'] = { unitKey: 'spoon', count: 1, state: 'cooked', confirmed: true };
   r2.addItem('almond');
   const placed = r2.mealRows.value.filter(m => m.count).map(m => m.k);
   if (placed.indexOf('post') >= 0) bad('可见脂肪未被改派出围训练期餐次');
@@ -408,7 +415,7 @@ try {
 
   // 录入带餐次
   R.setMeal('lunch');
-  R.draft.value['chicken'] = { unitKey: 'g', count: 200, state: 'raw' };
+  R.draft.value['chicken'] = { unitKey: 'g', count: 200, state: 'raw', confirmed: true };
   R.addItem('chicken');
   const lunch = R.mealRows.value.find(m => m.k === 'lunch');
   if (!lunch || lunch.count !== 1) bad('录入未归入午餐');
@@ -417,7 +424,7 @@ try {
   else ok('200 g 生鸡胸 = 45 g 蛋白，落在每餐 30-45 g 均匀分布基准内');
 
   // 单餐蛋白不足标黄
-  R.draft.value['egg'] = { unitKey: 'pcs', count: 1, state: 'cooked' };
+  R.draft.value['egg'] = { unitKey: 'pcs', count: 1, state: 'cooked', confirmed: true };
   R.setMeal('snack');
   R.addItem('egg');
   const snack = R.mealRows.value.find(m => m.k === 'snack');
@@ -449,7 +456,7 @@ try {
   const ymdOf = (ds) => { const d = new Date(ds); d.setDate(d.getDate() - 1); return ymdN(d); };
   const yesterdayDate = ymdOf(R.dateStr.value);
   R.dateStr.value = yesterdayDate;
-  R.draft.value['salmon'] = { unitKey: 'block', count: 1, state: 'raw' };
+  R.draft.value['salmon'] = { unitKey: 'block', count: 1, state: 'raw', confirmed: true };
   R.setMeal('dinner');
   R.addItem('salmon');
   const yCount = R.itemCount.value;
@@ -605,7 +612,7 @@ try {
   const R3 = ctx.__CAP.setup();
   R3.dateStr.value = '2030-02-01';
   R3.dayType.value = 'rest';
-  R3.draft.value['protein_powder'] = { unitKey: 'scoop', count: 1, state: 'cooked' };
+  R3.draft.value['protein_powder'] = { unitKey: 'scoop', count: 1, state: 'cooked', confirmed: true };
   R3.addItem('protein_powder');
   const wp = R3.warnings.value.find(x => x.t.indexOf('乳清') >= 0);
   if (!wp) bad('休息日应给出乳清相关提示');
@@ -734,7 +741,7 @@ try {
   R4.setTrainCfg({ enabled: true, postHours: 2 });   // 早餐入窗口
   R4.dateStr.value = '2030-03-01';
   R4.dayType.value = 'lower';
-  R4.draft.value['pecan'] = { unitKey: 'g', count: 20, state: 'cooked' };
+  R4.draft.value['pecan'] = { unitKey: 'g', count: 20, state: 'cooked', confirmed: true };
   R4.addItem('pecan', 'breakfast');
   const wIn = R4.warnings.value.find(x => x.lv === 'red' && x.t.indexOf('可见脂肪') >= 0);
   if (!wIn) bad('早餐处于围训练期时，碧根果应报红');
@@ -749,7 +756,7 @@ try {
   R4.dateStr.value = '2030-03-02';
   R4.setTrainCfg({ postHours: 2 });
   R4.meal.value = 'breakfast';
-  R4.draft.value['pecan'] = { unitKey: 'g', count: 20, state: 'cooked' };
+  R4.draft.value['pecan'] = { unitKey: 'g', count: 20, state: 'cooked', confirmed: true };
   R4.addItem('pecan');
   const placed2 = R4.mealRows.value.filter(m => m.count).map(m => m.k);
   if (placed2.indexOf('breakfast') >= 0) bad('早餐处于围训练期时，可见脂肪应被改派');
