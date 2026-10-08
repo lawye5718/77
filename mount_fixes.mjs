@@ -83,16 +83,22 @@ if (inFood.length) {
   ok(bright < 170, '标色背景为深色（平均亮度 ' + Math.round(bright) + ' < 170，白字可读）');
 }
 
-console.log('\n=== 3. 分项看板可点：进入该类今日已摄入并可逐条删除 ===');
+console.log('\n=== 3. 点分项小结 → 直接进入已摄入食物栏对应分区 ===');
 const ring = [...d.querySelectorAll('.pd-ring')].find(r => /蛋白/.test(r.textContent || ''));
 click(ring);
-ok(await waitFor(() => /今日已摄入/.test(txt()) && d.querySelector('.pd-intake-row')), '点环形「蛋白质」→ 打开分项已摄入小结卡');
+ok(await waitFor(() => !!d.querySelector('.pd-intake-sec')), '点环形「蛋白质」→ 进入已摄入食物栏（不再弹窗）');
+const isecs = [...d.querySelectorAll('.pd-intake-sec')];
+ok(isecs.length > 0, '已摄入栏按五大类分区（' + isecs.length + ' 个分区）');
+ok(!!d.getElementById('intake-cat-protein'), '存在蛋白质分区锚点 intake-cat-protein');
 const rows0 = d.querySelectorAll('.pd-intake-row').length;
-ok(rows0 > 0, '小结卡列出 ' + rows0 + ' 条已摄入');
+ok(rows0 > 0, '已摄入栏列出 ' + rows0 + ' 条');
+ok(!!d.querySelector('.pd-intake-g'), '每条有可直接改的克数输入框');
 const delBtn = d.querySelector('.pd-intake-row .del');
 click(delBtn);
-ok(await waitFor(() => d.querySelectorAll('.pd-intake-row').length < rows0), '点删除后该条从小结卡消失');
-click([...d.querySelectorAll('button')].find(b => /关闭/.test(b.textContent || '')));
+ok(await waitFor(() => d.querySelectorAll('.pd-intake-row').length < rows0), '点 × 后该条从已摄入栏消失');
+// 切回「录入」页继续后面的用例
+click([...d.querySelectorAll('.pd-tab')].find(b => /录入/.test(b.textContent || '')));
+await new Promise(r => setTimeout(r, 400));
 
 console.log('\n=== 4. 清空今日 ===');
 const clr = [...d.querySelectorAll('.pd-clr')].find(b => /清空今日/.test(b.textContent || ''));
@@ -143,6 +149,24 @@ if (firstFood) {
   const blocked = /不能超过/.test(txt()) || d.querySelectorAll('.pd-today-row').length === before;
   ok(blocked, '数量 50000 g 被拦下，未计入已摄入');
 }
+
+console.log('\n=== 9. 围训练期 SOP：香蕉与蛋白粉分开 + 可调量 + 确认计入 ===');
+const sopFoods = [...d.querySelectorAll('.pd-sop-food')];
+ok(sopFoods.length >= 4, 'SOP 食物条目 ' + sopFoods.length + ' 条（香蕉与蛋白粉已各自独立）');
+ok(/香蕉/.test(txt()) && /蛋白粉/.test(txt()), 'SOP 里香蕉与蛋白粉同时出现');
+ok(/训练前吃/.test(txt()) && /训练后吃/.test(txt()), '条目标注「训练前吃 / 训练后吃」');
+ok(d.querySelectorAll('.pd-sop-step').length >= 2, 'SOP 有 ± 调量按钮');
+const rows9 = d.querySelectorAll('.pd-today-row').length;
+click([...d.querySelectorAll('.pd-sop-ok')][0]);
+ok(await waitFor(() => /已计入已摄入/.test(txt())), '点「确认计入」→ 提示已计入已摄入');
+ok(await waitFor(() => d.querySelectorAll('.pd-today-row').length > rows9), 'SOP 条目进入今日已摄入列表');
+
+console.log('\n=== 10. 供能占比：目前 vs 最佳 ===');
+ok(/目前\s*\d+%/.test(txt()) && /最佳\s*\d+%/.test(txt()), '占比图例同时给出「目前 %」与「最佳 %」');
+
+console.log('\n=== 11. 常用食物：录入过即点亮常用 ===');
+const stars = [...d.querySelectorAll('.pd-star.on')];
+ok(stars.length > 0, '录入过的食物已点亮常用星标（' + stars.length + ' 个）');
 
 console.log('\n=== 6. 无 JS 运行时错误 ===');
 const real = errors.filter(e => !/Could not load|Not implemented|css/i.test(e));

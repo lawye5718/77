@@ -91,8 +91,8 @@
 
   <!-- ===================== 环形仪表盘 ===================== -->
   <section class="pd-rings">
-    <div v-for="ring in rings" :key="ring.key" class="pd-ring" @click="openIntakeSummary(ring.key)"
-         title="点击查看该分项今日已摄入，可逐条删除">
+    <div v-for="ring in rings" :key="ring.key" class="pd-ring" @click="gotoIntakeCat(ring.key)"
+         title="点击进入「已摄入食物栏」的该分项，可改数量或删除">
       <div class="pd-ring-svg">
         <svg viewBox="0 0 100 100">
           <circle class="pd-ring-bg" cx="50" cy="50" r="40"></circle>
@@ -124,6 +124,12 @@
       <div class="pd-split">
         <div v-for="m in macroSplit" :key="m.k" class="pd-split-seg"
              :style="{ width: m.pct + '%', background: m.c }">{{ m.pct >= 8 ? m.k + ' ' + m.pct + '%' : '' }}</div>
+      </div>
+      <div class="pd-split-legend">
+        <div v-for="m in macroSplit" :key="m.k" class="pd-split-leg">
+          <i :style="{ background: m.c }"></i>{{ m.k }}
+          <b>目前 {{ m.pct }}%</b><span>最佳 {{ m.best }}%</span>
+        </div>
       </div>
       <div class="pd-bar-note">
         <span v-for="m in macroSplit" :key="m.k">{{ m.k }} {{ r0(m.v) }} kcal</span>
@@ -167,15 +173,39 @@
   <section class="pd-sop">
     <div class="pd-warn-title"><i class="fa-solid fa-list-check"></i>
       {{ dayType === 'rest' ? '休息日执行清单' : '围训练期 SOP' }}</div>
-    <button v-for="s in sopItems" :key="s.k" class="pd-sop-item" :class="{ done: sopState[s.k] }" @click="toggleSop(s.k)">
-      <i class="fa-solid" :class="sopState[s.k] ? 'fa-circle-check' : 'fa-circle'"></i>
-      <div><b>{{ s.t }}</b><span>{{ s.d }}</span></div>
-    </button>
+    <div v-for="s in sopItems" :key="s.k" class="pd-sop-block">
+      <!-- 食物条目：香蕉与蛋白粉各自独立，可换食物 / 调克数 / 确认计入 -->
+      <template v-if="s.def">
+        <div class="pd-sop-head">
+          <i class="fa-solid" :class="sopState[s.k] ? 'fa-circle-check' : 'fa-circle'"></i>
+          <b>{{ s.t }}</b>
+          <em v-if="s.slot === 'pre'">训练前吃</em>
+          <em v-else-if="s.slot === 'post'">训练后吃</em>
+        </div>
+        <div class="pd-sop-food">
+          <button class="pd-sop-name" @click="openSopPick(s.k)" title="换成食物库里的其他食物">
+            {{ sopFoodName(s.k) }} <i class="fa-solid fa-repeat"></i>
+          </button>
+          <button class="pd-sop-step" @click="bumpSop(s.k, -5)">−</button>
+          <input type="number" step="5" inputmode="decimal" class="pd-sop-g"
+                 :value="sopGramsOf(s.k)" @change="setSopGrams(s.k, $event.target.value)">
+          <span class="pd-sop-unit">g</span>
+          <button class="pd-sop-step" @click="bumpSop(s.k, 5)">＋</button>
+          <button class="pd-sop-ok" @click="confirmSop(s.k)"><i class="fa-solid fa-check"></i> 确认计入</button>
+        </div>
+        <div v-if="s.d" class="pd-sop-note">{{ s.d }}</div>
+      </template>
+      <!-- 纯提示条目：保留原来的勾选打卡 -->
+      <button v-else class="pd-sop-item" :class="{ done: sopState[s.k] }" @click="toggleSop(s.k)">
+        <i class="fa-solid" :class="sopState[s.k] ? 'fa-circle-check' : 'fa-circle'"></i>
+        <div><b>{{ s.t }}</b><span>{{ s.d }}</span></div>
+      </button>
+    </div>
   </section>
 
   <!-- ===================== Tab ===================== -->
   <nav class="pd-tabs">
-    <button v-for="t in [['add','录入'],['list','餐次'],['trend','趋势'],['lib','食物库'],['set','设置']]"
+    <button v-for="t in [['add','录入'],['intake','已摄入'],['list','餐次'],['trend','趋势'],['lib','食物库'],['set','设置']]"
             :key="t[0]" @click="setTab(t[0])" class="pd-tab" :class="{ act: tab === t[0] }">{{ t[1] }}</button>
   </nav>
 
@@ -254,6 +284,35 @@
       </div>
     </div>
     <div v-if="!foodSections.length" class="pd-meal-empty">没有匹配的食物，试试清空搜索词</div>
+  </section>
+
+  <!-- ---------- 已摄入食物栏 ---------- -->
+  <section v-if="tab === 'intake'" class="pd-pane">
+    <div class="pd-card-title">今日已摄入（{{ countedItemCount }} 项）
+      <small v-if="pendingItemCount" class="pd-pend">另有 {{ pendingItemCount }} 项待确认</small>
+    </div>
+    <div v-if="!intakeSections.length" class="pd-empty">今天还没有已摄入记录，去「录入」添加第一项。</div>
+    <div v-for="sec in intakeSections" :key="sec.key" class="pd-intake-sec">
+      <div class="pd-sec-title" :id="'intake-cat-' + sec.key">
+        <i class="fa-solid" :class="sec.icon"></i> {{ sec.name }}
+        <span>{{ sec.items.length }} 项 · {{ sec.grams }} g · {{ sec.kcal }} kcal</span>
+      </div>
+      <div v-for="it in sec.items" :key="it.id" class="pd-intake-row">
+        <div class="pd-intake-main">
+          <b>{{ it.name }}</b>
+          <span>{{ mealName(it.meal) }} · {{ r0(per100Of(it.foodId, it.state).kcal * it.grams / 100) }} kcal</span>
+        </div>
+        <input type="number" step="5" inputmode="decimal" class="pd-intake-g"
+               :value="it.grams" @change="setItemGrams(it, $event.target.value)">
+        <span class="pd-intake-unit">g</span>
+        <div class="pd-intake-ops">
+          <button @click="bumpGrams(it, -10)">-10</button>
+          <button @click="bumpGrams(it, 10)">+10</button>
+          <button class="del" @click="removeItem(it.id)" title="从已摄入中删除"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+    </div>
+    <div class="pd-note pd-note-box">数量可直接改，也可 ±10 微调；点 × 删除。删除后该食物会同步移出「常用食物」。</div>
   </section>
 
   <!-- ---------- 餐次明细 ---------- -->
@@ -609,22 +668,20 @@
     </div>
   </div>
 
-  <!-- ===================== 弹窗：分项今日已摄入小结 ===================== -->
-  <div v-if="intakeModal.visible" class="pd-mask" @click.self="closeIntakeSummary()">
+  <!-- ===================== 弹窗：SOP 换一种食物 ===================== -->
+  <div v-if="sopPick.visible" class="pd-mask" @click.self="closeSopPick()">
     <div class="pd-modal">
-      <div class="pd-modal-title">{{ intakeTitle }} · 今日已摄入（{{ intakeItems.length }} 项）</div>
-      <div v-if="!intakeItems.length" class="pd-meal-empty">这一分项今天还没有已摄入记录</div>
-      <div v-for="it in intakeItems" :key="it.id" class="pd-intake-row">
-        <div class="pd-intake-main">
-          <b>{{ it.name }}</b>
-          <span>{{ mealName(it.meal) }} · {{ it.grams }} g ·
-            {{ r0(per100Of(it.foodId, it.state).kcal * it.grams / 100) }} kcal<template v-if="it.pendingConfirmation"> · 待确认</template></span>
-        </div>
-        <button class="del" @click="removeItem(it.id)" title="从已摄入中删除"><i class="fa-solid fa-xmark"></i></button>
+      <div class="pd-modal-title">换一种食物</div>
+      <input class="pd-search" v-model="sopPick.q" placeholder="搜索食物名称…">
+      <div class="pd-pick-list">
+        <button v-for="f in allFoods.filter(x => !sopPick.q || x.name.toLowerCase().indexOf(sopPick.q.toLowerCase()) >= 0)"
+                :key="f.id" class="pd-pick-item" @click="chooseSopFood(f)">
+          <b>{{ f.name }}</b>
+          <span>蛋白 {{ r1(f.n.p) }} · 脂肪 {{ r1(f.n.f) }} · 碳水 {{ r1(f.n.c) }} · {{ r0(f.n.kcal) }} kcal / 100g</span>
+        </button>
       </div>
       <div class="pd-modal-ops">
-        <button class="pd-btn" @click="gotoMealList(intakeModal.cat)">去餐次明细</button>
-        <button class="pd-btn primary" @click="closeIntakeSummary()">关闭</button>
+        <button class="pd-btn" @click="closeSopPick()">取消</button>
       </div>
     </div>
   </div>

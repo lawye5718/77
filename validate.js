@@ -445,14 +445,17 @@ try {
   if (!snack || snack.p >= 30) bad('单颗蛋应低于 30g');
   else ok('单餐蛋白 ' + Math.round(snack.p) + ' g < 30 g → 界面标黄提示');
 
-  // 收藏
-  R.toggleFav('salmon');
-  if (!R.isFav('salmon')) bad('收藏失败'); else ok('收藏置顶：三文鱼已加入常用');
+  // 常用食物（2026-10-08 新语义）：录入过即自动进入常用，手动星标仍可切换
+  const autoFavs = ['chicken', 'salmon', 'egg'].filter(id => R.isFav(id));
+  if (autoFavs.length !== 3) bad('录入过的食物应自动进入常用，实际只有 ' + autoFavs.length + ' 个');
+  else ok('录入过的食物自动进入常用：' + autoFavs.join('、'));
   const favFoods = R.foodsInCat.value;
-  if (!favFoods.length || favFoods[0].id !== 'salmon') bad('收藏未置顶到列表首位');
-  else ok('收藏项排在当前分类列表首位');
+  if (!favFoods.length) bad('常用食物应排在当前分类列表里');
+  else ok('常用食物已置顶到分类列表（首位：' + favFoods[0].name + '）');
   R.toggleFav('salmon');
-  if (R.isFav('salmon')) bad('取消收藏失败'); else ok('可取消收藏');
+  if (R.isFav('salmon')) bad('手动取消常用失败'); else ok('可手动取消常用');
+  R.toggleFav('salmon');
+  if (!R.isFav('salmon')) bad('手动恢复常用失败'); else ok('可手动恢复常用');
 
   // 撤销
   const before = R.itemCount.value;
@@ -460,6 +463,8 @@ try {
   R.removeItem(target.id);
   if (R.itemCount.value !== before - 1) bad('删除失败');
   else ok('删除条目 → 计数 ' + before + ' → ' + R.itemCount.value);
+  if (R.isFav(target.foodId)) bad('删除后应同步移出常用食物');
+  else ok('删除后同步移出常用：' + target.name);
   if (!R.canUndo.value) bad('删除后应可撤销');
   R.undoDelete();
   if (R.itemCount.value !== before) bad('撤销未恢复条目');

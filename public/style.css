@@ -559,3 +559,66 @@ input, select, textarea { font-size: 16px !important; }
 .pd-pick-item b { display: block; font-size: 12.5px; font-weight: 900; color: var(--pd-tx); }
 .pd-pick-item span { font-size: 9.5px; color: var(--pd-sub); font-weight: 700; }
 .pd-pick-item:active { background: rgba(16, 185, 129, 0.16); }
+
+/* ============================================================
+ * 2026-10-08 第二轮：已摄入食物栏 / SOP 食物条目 / 占比图例
+ * ============================================================ */
+.pd-pend { margin-left: 6px; font-size: 10px; color: #FCD34D; font-weight: 700; }
+
+/* 已摄入食物栏 */
+.pd-intake-sec { margin-bottom: 12px; }
+.pd-intake-sec .pd-intake-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pd-intake-g {
+  width: 74px; flex: none; text-align: center;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 9px; padding: 6px 4px; font-weight: 800; font-size: 13px;
+}
+.pd-intake-unit { font-size: 10px; color: var(--pd-sub); font-weight: 700; }
+.pd-intake-ops { display: flex; gap: 4px; margin-left: auto; }
+.pd-intake-ops button {
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 9px; padding: 5px 8px; font-size: 11px; font-weight: 800;
+}
+.pd-intake-ops button:active { transform: scale(0.95); }
+
+/* 围训练期 SOP：食物条目（香蕉 / 蛋白粉各自独立） */
+.pd-sop-block { margin-bottom: 8px; }
+.pd-sop-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 900; color: var(--pd-tx); }
+.pd-sop-head em {
+  font-style: normal; font-size: 9.5px; font-weight: 800; padding: 2px 7px; border-radius: 999px;
+  background: rgba(56, 189, 248, 0.16); border: 1px solid rgba(56, 189, 248, 0.45); color: #7DD3FC;
+}
+.pd-sop-food { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.pd-sop-name {
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 10px; padding: 6px 9px; font-size: 12px; font-weight: 800;
+  white-space: nowrap;
+}
+.pd-sop-name i { opacity: 0.7; margin-left: 4px; }
+.pd-sop-g {
+  width: 66px; text-align: center;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 9px; padding: 6px 4px; font-weight: 800; font-size: 13px;
+}
+.pd-sop-unit { font-size: 10px; color: var(--pd-sub); font-weight: 700; }
+.pd-sop-step {
+  width: 30px; background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 9px; padding: 5px 0; font-size: 13px; font-weight: 900;
+}
+.pd-sop-step:active { transform: scale(0.94); }
+.pd-sop-ok {
+  margin-left: auto; background: rgba(16, 185, 129, 0.20); border: 1px solid rgba(16, 185, 129, 0.55);
+  color: #A7F3D0; border-radius: 10px; padding: 6px 10px; font-size: 11.5px; font-weight: 900; white-space: nowrap;
+}
+.pd-sop-ok:active { transform: scale(0.95); }
+.pd-sop-note { font-size: 10px; color: var(--pd-sub); font-weight: 600; margin-top: 4px; line-height: 1.45; }
+
+/* 供能占比图例：目前 vs 最佳 */
+.pd-split-legend { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.pd-split-leg {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--pd-sub); font-weight: 700;
+}
+.pd-split-leg i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.pd-split-leg b { color: var(--pd-tx); font-weight: 900; }
+.pd-split-leg span { opacity: 0.75; }

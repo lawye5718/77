@@ -310,18 +310,25 @@ function fixSuggestions(totals, t, dayType, foodMap, mealKey) {
   return out;
 }
 
-/* ---------- SOP 清单 ---------- */
+/* ---------- SOP 清单 ----------
+ * 2026-10-08 改造：原来「半根香蕉 + 15-20g 乳清蛋白」挤在同一条里 —— 既不能分开确认、
+ * 也不能单独调量、更无法单独换食物。现拆成独立条目：
+ *   带 def 的条目 = 食物条目（可换食物 / 调克数 / 确认后按 slot 计入已摄入，并标注练前·练后）
+ *   只有 d 的条目 = 纯提示条目（保留原来的勾选打卡）
+ */
 const SOP_TRAIN = [
-  { k: 'pre',  t: '练前 30 分钟', d: '半根香蕉 + 15-20 g 乳清蛋白' },
-  { k: 'mid',  t: '练中',         d: '纯水 + 少量海盐' },
-  { k: 'post', t: '练后 30 分钟内', d: '半根香蕉 + 30-40 g 乳清蛋白（抓 GLUT4 窗口）' },
-  { k: 'meal', t: '练后 1-2 小时正餐', d: '白米饭/红薯 + 去皮瘦肉 + 无油蔬菜' }
+  { k: 'pre_carb',  t: '练前 30 分钟 · 快碳',    slot: 'pre',  def: { id: 'banana', grams: 60 } },
+  { k: 'pre_pro',   t: '练前 30 分钟 · 蛋白',    slot: 'pre',  def: { id: 'protein_powder', grams: 20 } },
+  { k: 'mid',       t: '练中',                   d: '纯水 + 少量海盐' },
+  { k: 'post_carb', t: '练后 30 分钟内 · 快碳',  slot: 'post', def: { id: 'banana', grams: 60 } },
+  { k: 'post_pro',  t: '练后 30 分钟内 · 蛋白',  slot: 'post', def: { id: 'protein_powder', grams: 35 } },
+  { k: 'meal',      t: '练后 1-2 小时正餐',      d: '白米饭/红薯 + 去皮瘦肉 + 无油蔬菜' }
 ];
 const SOP_REST = [
-  { k: 'fish', t: '抗炎组合',     d: '三文鱼 + 纳豆（Omega-3 + 纳豆激酶）' },
-  { k: 'vege', t: '深色蔬菜 500 g', d: '纤维喂养益生菌，提供钾镁叶酸' },
-  { k: 'nosup', t: '不用蛋白粉',   d: '蛋白全部来自天然食物' },
-  { k: 'nut',  t: '坚果限量 20-30 g', d: '避免过量 Omega-6' }
+  { k: 'fish',  t: '抗炎组合',         d: '三文鱼 + 纳豆（Omega-3 + 纳豆激酶）', def: { id: 'salmon', grams: 120 } },
+  { k: 'vege',  t: '深色蔬菜 500 g',   d: '纤维喂养益生菌，提供钾镁叶酸',        def: { id: 'broccoli', grams: 300 } },
+  { k: 'nosup', t: '不用蛋白粉',       d: '蛋白全部来自天然食物' },
+  { k: 'nut',   t: '坚果限量 20-30 g', d: '避免过量 Omega-6',                    def: { id: 'walnut', grams: 25 } }
 ];
 
 /* ---------- 达标档位判定 ---------- */
@@ -510,14 +517,17 @@ createApp({
         w: clamp(s.netC / hi * 100, 0, 100)
       };
     });
+    /* 供能占比：同时给出「目前占比」与由当日目标反推的「最佳占比」 */
     const macroSplit = computed(() => {
-      const s = totals.value;
+      const s = totals.value, t = targets.value;
       const pk = s.p * 4, ck = s.c * 4, fk = s.f * 9;
       const tot = pk + ck + fk || 1;
+      const tp = (t.protein || 0) * 4, tc = (t.carb || 0) * 4, tf = (t.fat || 0) * 9;
+      const tt = tp + tc + tf || 1;
       return [
-        { k: '蛋白', v: pk, pct: Math.round(pk / tot * 100), c: '#10B981' },
-        { k: '碳水', v: ck, pct: Math.round(ck / tot * 100), c: '#38BDF8' },
-        { k: '脂肪', v: fk, pct: Math.round(fk / tot * 100), c: '#F59E0B' }
+        { k: '蛋白', v: pk, pct: Math.round(pk / tot * 100), best: Math.round(tp / tt * 100), c: '#10B981' },
+        { k: '碳水', v: ck, pct: Math.round(ck / tot * 100), best: Math.round(tc / tt * 100), c: '#38BDF8' },
+        { k: '脂肪', v: fk, pct: Math.round(fk / tot * 100), best: Math.round(tf / tt * 100), c: '#F59E0B' }
       ];
     });
 
@@ -618,6 +628,92 @@ createApp({
     const sopItems = computed(() => dayType.value === 'rest' ? SOP_REST : SOP_TRAIN);
     const toggleSop = (k) => { const d = ensureDay(); d.sop = d.sop || {}; d.sop[k] = !d.sop[k]; save(); };
 
+    /* 每条 SOP 选的食物与克数记在用户偏好里，下次打开仍是上次的选择 */
+    function sopCfgOf(k) {
+      const c = up.value.sopCfg || (up.value.sopCfg = {});
+      if (!c[k]) {
+        const it = sopItems.value.find(x => x.k === k);
+        c[k] = { foodId: (it && it.def && it.def.id) || '', grams: (it && it.def && it.def.grams) || 100 };
+      }
+      return c[k];
+    }
+    const sopFoodOf = (k) => foodMap.value[sopCfgOf(k).foodId] || null;
+    const sopFoodName = (k) => { const f = sopFoodOf(k); return f ? f.name : '未选食物'; };
+    const sopGramsOf = (k) => Number(sopCfgOf(k).grams) || 0;
+    function bumpSop(k, d) {
+      const c = sopCfgOf(k);
+      c.grams = Math.max(5, Math.round((Number(c.grams) || 0) + d));
+      save();
+    }
+    function setSopGrams(k, v) {
+      const c = sopCfgOf(k);
+      c.grams = Math.max(5, Number(v) || 5);
+      save();
+    }
+    const sopPick = ref({ visible: false, k: '', q: '' });
+    function openSopPick(k) { sopPick.value = { visible: true, k: k, q: '' }; }
+    function closeSopPick() { sopPick.value.visible = false; }
+    function chooseSopFood(f) {
+      const c = sopCfgOf(sopPick.value.k);
+      c.foodId = f.id;
+      sopPick.value.visible = false;
+      save();
+      showToast('已换成 ' + f.name);
+    }
+    /* 确认计入：按 slot 落到「练前/练后」餐次，并在已摄入栏可按该餐次查看 */
+    function confirmSop(k) {
+      const it = sopItems.value.find(x => x.k === k);
+      if (!it || !it.def) return;
+      const c = sopCfgOf(k);
+      const f = foodMap.value[c.foodId];
+      if (!f) { showToast('请先选一种食物'); return; }
+      const g = guardGrams(c.grams);
+      if (!g) return;
+      const mk = it.slot || safeMealFor(f.id);
+      ensureDay().items.push({
+        id: uid(), foodId: f.id, name: f.name, cat: f.cat,
+        grams: r1(g), state: f.base || 'cooked',
+        unitKey: 'g', unitLabel: '克', count: g,
+        meal: mk, ts: Date.now()
+      });
+      const d = ensureDay(); d.sop = d.sop || {}; d.sop[k] = true;
+      markFav(f.id);
+      save();
+      maybeCheer();
+      const slotName = it.slot === 'pre' ? '训练前' : (it.slot === 'post' ? '训练后' : mealName(mk));
+      showToast('已计入已摄入：' + f.name + ' ' + g + ' g（' + slotName + '）');
+    }
+
+    /* ---------- 已摄入食物栏：按五大类分区 ---------- */
+    const intakeSections = computed(() => {
+      const out = [];
+      (window.CATEGORIES || []).forEach(c => {
+        const items = countedItems(day.value.items).filter(it => it.cat === c.key);
+        if (!items.length) return;
+        let grams = 0, kcal = 0;
+        items.forEach(it => {
+          const g = Number(it.grams) || 0;
+          grams += g;
+          kcal += (per100(foodMap.value[it.foodId], it.state).kcal || 0) * g / 100;
+        });
+        out.push({ key: c.key, name: c.name, icon: c.icon, items: items, grams: r0(grams), kcal: r0(kcal) });
+      });
+      return out;
+    });
+    /* 点分项小结 → 直接进入已摄入食物栏的对应分区（不再弹窗） */
+    function gotoIntakeCat(cat) {
+      const key = (cat === 'kcal' || cat === '') ? '' : cat;
+      tab.value = 'intake';
+      if (!key) return;
+      activeCat.value = key;
+      setTimeout(() => {
+        try {
+          const el = document.getElementById('intake-cat-' + key);
+          if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (e) {}
+      }, 160);
+    }
+
     /* ---------- 录入草稿（默认取上次记录） ---------- */
     const draft = ref({});
     function initDraft() {
@@ -691,6 +787,7 @@ createApp({
       });
       up.value.itemPrefs = up.value.itemPrefs || {};
       up.value.itemPrefs[foodId] = { unitKey: d.unitKey, count: Number(d.count) || 0, state: d.state };
+      markFav(foodId);              // 选过即进入「常用食物」
       d.confirmed = false;
       save();
       maybeCheer();
@@ -736,6 +833,7 @@ createApp({
       // 同步为默认值，下次打开这个食物就是刚用过的克数
       up.value.itemPrefs = up.value.itemPrefs || {};
       up.value.itemPrefs[foodId] = { unitKey: 'g', count: g, state: st };
+      markFav(foodId);              // 选过即进入「常用食物」
       initDraft();
       save(); maybeCheer();
       showToast(moved
@@ -755,6 +853,7 @@ createApp({
       undoStack.value.push({ item: removed, idx, date: dateStr.value, user: user.value, t: Date.now() });
       if (undoStack.value.length > 10) undoStack.value.shift();
       d.items.splice(idx, 1);
+      unmarkFav(removed.foodId);    // 删掉就不再出现在「常用食物」
       save();
       showToast('已删除 ' + removed.name + ' · 可撤销');
     }
@@ -834,6 +933,16 @@ createApp({
     }
     function bumpGrams(it, delta) {
       it.grams = Math.min(MAX_ITEM_GRAMS, Math.max(0, r1((Number(it.grams) || 0) + delta)));
+      it.count = it.grams;
+      save(); maybeCheer();
+    }
+    /* 已摄入栏里直接改克数 */
+    function setItemGrams(it, v) {
+      const n = Number(v) || 0;
+      if (n <= 0) { showToast('克数需大于 0'); return; }
+      if (n > MAX_ITEM_GRAMS) { showToast('单条不能超过 ' + MAX_ITEM_GRAMS + ' g'); return; }
+      it.grams = r1(n);
+      it.count = r1(n);
       save(); maybeCheer();
     }
     function moveMeal(it, k) { it.meal = k; save(); showToast('已移到「' + mealName(k) + '」'); }
@@ -841,6 +950,17 @@ createApp({
     /* ---------- 收藏 ---------- */
     const favs = computed(() => up.value.favs || []);
     const isFav = (id) => favs.value.indexOf(id) >= 0;
+    /* 需求：从食物库选过就进「常用」，删掉就移出「常用」；
+     * 常用食物的默认数量由 itemPrefs 记住（= 上次选择的量）。 */
+    function markFav(id) {
+      if (!id) return;
+      const a = (up.value.favs || []).slice();
+      if (a.indexOf(id) < 0) { a.unshift(id); up.value.favs = a.slice(0, 12); }
+    }
+    function unmarkFav(id) {
+      if (!id) return;
+      up.value.favs = (up.value.favs || []).filter(x => x !== id);
+    }
     const toggleFav = (id) => {
       const a = (up.value.favs || []).slice();
       const i = a.indexOf(id);
@@ -1338,10 +1458,12 @@ createApp({
       meal, mealList, setMeal, mealRows, mealName, moveMeal,
       trainCfg, periMeals, periMealNames, periWindow, mealTimeOf, setTrainCfg, fmtMin,
       sopItems, toggleSop, sopState: computed(() => day.value.sop || {}),
+      sopFoodName, sopGramsOf, bumpSop, setSopGrams, sopPick, openSopPick, closeSopPick, chooseSopFood, confirmSop,
       draft, foodsInCat, foodSections, itemsByCat, allFoods, foodMap,
       intakeModal, intakeItems, intakeTitle, openIntakeSummary, closeIntakeSummary, gotoMealList, catName,
+      intakeSections, gotoIntakeCat, markFav, unmarkFav,
       fixAdj, fixGrams, bumpFix, addFix, fixPick, openFixPick, closeFixPick, pickFood,
-      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday, confirmImportedItem,
+      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, setItemGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday, confirmImportedItem,
       undoStack, undoDelete, canUndo: computed(() => undoStack.value.length > 0),
       favs, isFav, toggleFav,
       yesterday, canCopy, copyMsg, copyYesterday,
