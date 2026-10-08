@@ -359,8 +359,8 @@ try {
   { const before = r2.itemCount.value;
     if (r2.gramsOf('salmon') !== 0 && !r2.draft.value['salmon'].confirmed) bad('未确认默认值仍被计算');
     r2.addItem('salmon');
-    if (r2.itemCount.value !== before) bad('未确认的默认数量被直接录入');
-    else ok('默认数量未确认 → 不计入当日摄入'); }
+    if (r2.itemCount.value !== before + 1) bad('点击 + 应视为显式确认并录入');
+    else ok('点击 + 视为显式确认 → 直接计入'); }
 
   // 换算提示：改单位为「克」后克数应变为 count 值
   r2.setUnit('salmon', 'g');
