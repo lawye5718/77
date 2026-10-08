@@ -261,6 +261,20 @@ try {
   if (Math.abs(s.vege - 500) > 0.01) bad('蔬菜克数汇总错误'); else ok('蔬菜/水果/坚果 分类克数汇总正确');
   if (Math.abs(s.nut - 10) > 0.01) bad('坚果克数汇总错误');
   if (Math.abs(s.netC - (s.c - s.fiber)) > 0.01) bad('净碳水计算错误'); else ok('净碳水 = 总碳水 − 纤维');
+  const missingState = si([{ foodId: 'chicken', grams: 100 }], map);
+  if (Math.abs(missingState.p - 22.5) > 0.01) bad('缺少生熟状态时应按食物基础状态计算');
+  else ok('缺少生熟状态的旧记录按食物基础状态计算');
+  const invalidFood = { id: 'invalid', cat: 'vege', base: 'raw', yield: 0, n: { p: -1, f: Infinity, c: 'bad', fiber: NaN, kcal: -20 } };
+  const invalidTotals = si([
+    { foodId: 'invalid', grams: 100 },
+    { foodId: 'chicken', grams: -100, state: 'raw' },
+    { foodId: 'chicken', grams: Infinity, state: 'raw' },
+    null
+  ], { invalid: invalidFood, chicken });
+  if (![invalidTotals.p, invalidTotals.f, invalidTotals.c, invalidTotals.fiber, invalidTotals.kcal].every(Number.isFinite) ||
+      invalidTotals.p < 0 || invalidTotals.f < 0 || invalidTotals.c < 0 || invalidTotals.fiber < 0 || invalidTotals.kcal < 0 ||
+      invalidTotals.vege !== 100) bad('异常食物营养或克数污染了日摄入汇总');
+  else ok('异常营养数据和非正/非有限克数不会污染日摄入汇总');
 
   // 单位锚点
   const sp = (global.FOOD_DB || []).find(f => f.id === 'sweet_potato');
@@ -468,6 +482,7 @@ try {
   else ok('复制昨日 → 今日新增 ' + yCount + ' 项（提示语：' + R.copyMsg.value + '）');
 
   // 补缺口建议
+  R.setMeal('lunch');
   const fx = R.fixList.value;
   if (!fx.length) bad('应生成补缺口建议');
   else {
@@ -478,6 +493,17 @@ try {
     const awayIds = ['salmon', 'almond', 'walnut', 'avocado', 'cheese'];
     const awayShown = p.options.filter(o => awayIds.indexOf(o.id) >= 0);
     ok('awayOnly 可见脂肪项在训练日仍可推荐' + (awayShown.length ? '：' + awayShown.map(o => o.label).join('、') : '（本缺口下未进入前四）'));
+    const veg = fx.find(x => x.key === 'vege');
+    const vegOption = veg && veg.options.find(o => o.id === 'dark_vege');
+    if (!vegOption || vegOption.grams !== veg.gap || vegOption.covers !== veg.gap || vegOption.partial)
+      bad('蔬菜补缺口应按蔬菜克数直接换算，且正确报告补足量');
+    else ok('蔬菜补缺口按克数换算：建议 ' + vegOption.grams + ' g，实际补 ' + vegOption.covers + ' g');
+    R.setMeal('breakfast');
+    const breakfastFx = R.fixList.value;
+    if (breakfastFx.some(x => x.options.some(o => o.id === 'chicken' || o.id === 'dark_vege')))
+      bad('早餐不应推荐不适配早餐的鸡胸/蔬菜补缺口项');
+    else ok('补缺口建议按当前餐次过滤不适配食物');
+    R.setMeal('lunch');
     // trainOnly 项（蛋白粉）在休息日必须消失
     R.dayType.value = 'rest';
     const fxRest = R.fixList.value.find(x => x.key === 'protein');
