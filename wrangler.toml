@@ -1,0 +1,27 @@
+name = "pulse-diet"
+main = "worker/index.js"
+compatibility_date = "2025-01-01"
+
+# ---- Workers Assets：静态资源托管（Free 套餐 $0）----
+# public/ 下的文件由 Cloudflare 边缘节点直接返回，带指纹缓存头。
+# 命中静态文件的请求完全不经过 Worker；只有 /api/* 这类没有对应静态文件的
+# 路径才会进入 worker/index.js。因此 Worker 脚本保持 ~6KB，
+# 冷启动不解析任何大字符串，不触碰 Free Tier 128MB 内存上限。
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
+
+# ---- KV 绑定 ----
+# 变量名必须是 WORKOUT_KV（大小写一致），与训练 App 共用同一个命名空间，不额外计费。
+# 改完必须执行 `npx wrangler deploy`（或在 Dashboard 点 Save and Deploy）才生效。
+# 绑定名写错时 worker/index.js 的 resolveKV() 会回退到名字含 kv 的其他绑定，
+# 可用 /api/data?debug=1 查看 env 里实际有哪些绑定。
+[[kv_namespaces]]
+binding = "WORKOUT_KV"
+# ⚠️ 原为占位文字「在这里填你的 KV 命名空间 ID」——不填必然导致「云端 KV 未绑定」。
+# 已填入真实 ID（与训练 App 共用同一命名空间 abb42f…，不额外计费）。
+id = "abb42fb063104ffcb0cb208e232ec9f3"
+
+# ---- 访问口令（可选）----
+# [vars]
+# ACCESS_PASSWORD = ""

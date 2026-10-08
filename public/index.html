@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#070B14">
+  <title>PULSE DIET · 增肌饮食日志</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/vendor/tailwind.js"></script>
+  <script src="/vendor/vue.js"></script>
+</head>
+<body>
+<div id="app" class="pd">
+
+  <!-- 云端告警 -->
+  <div v-if="!cloudOk" class="pd-cloud-bad">
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <span>{{ cloudMsg }}</span>
+  </div>
+
+  <!-- ===================== 顶部档案 ===================== -->
+  <header class="pd-head">
+    <div class="pd-row">
+      <div class="pd-user">
+        <button v-for="u in users" :key="u" @click="setUser(u)" class="pd-avatar-btn" :class="{ act: user === u }">
+          <img :src="avatarOf(u)" @error="$event.target.src = avatarOf(u)" alt="">
+          <span>{{ u }}</span>
+        </button>
+      </div>
+      <div class="pd-date">
+        <button @click="shiftDay(-1)"><i class="fa-solid fa-chevron-left"></i></button>
+        <input type="date" v-model="dateStr">
+        <button @click="shiftDay(1)"><i class="fa-solid fa-chevron-right"></i></button>
+        <button class="pd-today" @click="goToday()">今天</button>
+      </div>
+    </div>
+
+    <div class="pd-chips">
+      <button v-for="dt in dayTypes" :key="dt.k" @click="dayType = dt.k" class="pd-chip" :class="{ act: dayType === dt.k }">
+        <b>{{ dt.label }}</b><span>{{ dt.sub }}</span>
+      </button>
+    </div>
+
+    <div class="pd-row pd-setrow">
+      <label class="pd-fld">
+        <span>体重 kg</span>
+        <input type="number" step="0.5" inputmode="decimal" v-model.number="weight">
+      </label>
+      <label class="pd-fld">
+        <span>热量调整</span>
+        <select v-model="adjust">
+          <option v-for="a in adjustOptions" :key="a" :value="a">{{ a > 0 ? '+' + a + '%' : (a === 0 ? '基准' : a + '%') }}</option>
+        </select>
+      </label>
+      <button class="pd-mini" @click="openAvatarModal(user)"><i class="fa-solid fa-camera"></i> 头像</button>
+    </div>
+  </header>
+
+  <!-- ===================== 快捷操作 ===================== -->
+  <div class="pd-quick">
+    <button class="pd-quick-btn" :class="{ off: !canCopy }" @click="copyYesterday()">
+      <i class="fa-solid fa-copy"></i><b>复制昨日</b><span>{{ copyMsg }}</span>
+    </button>
+    <button class="pd-quick-btn" :class="{ off: !canUndo }" @click="undoDelete()">
+      <i class="fa-solid fa-rotate-left"></i><b>撤销删除</b><span>{{ canUndo ? '可恢复最近一次' : '暂无' }}</span>
+    </button>
+    <button class="pd-quick-btn" @click="openCheerCard()">
+      <i class="fa-solid fa-medal"></i><b>今日小结</b><span>已达成 {{ cheer.done }}/{{ cheer.total }}</span>
+    </button>
+  </div>
+
+  <!-- ===================== 目标条 ===================== -->
+  <section class="pd-targets">
+    <div class="pd-t"><i>蛋白</i><b>{{ targets.protein }} g</b></div>
+    <div class="pd-t"><i>碳水</i><b>{{ targets.carb }} g</b></div>
+    <div class="pd-t"><i>脂肪</i><b>{{ targets.fat }} g</b></div>
+    <div class="pd-t"><i>热量</i><b>{{ targets.kcal }}</b></div>
+    <div class="pd-t"><i>蔬菜</i><b>{{ targets.vege }} g</b></div>
+    <div class="pd-t"><i>坚果</i><b>{{ targets.nut }} g</b></div>
+  </section>
+  <div class="pd-ref">
+    {{ dayType === 'rest' ? '休息日 · 低碳中蛋白中高脂' : (dayType === 'lower' ? '下肢大重量 · 取上限' : '上肢中等 · 取下限') }}
+    · 78kg 锚点参考区间 蛋白 {{ refScaled.protein[0] }}-{{ refScaled.protein[1] }} / 碳水 {{ refScaled.carb[0] }}-{{ refScaled.carb[1] }} / 脂肪 {{ refScaled.fat[0] }}-{{ refScaled.fat[1] }} g
+  </div>
+  <div v-if="recon.off" class="pd-recon">
+    <i class="fa-solid fa-circle-info"></i>
+    按表内宏量折算为 <b>{{ targets.kcal }}</b> kcal，与原表参考区间 {{ refScaled.kcal[0] }}-{{ refScaled.kcal[1] }} 相差 {{ recon.diff }} kcal。
+    本表以宏量（g/kg）为准——宏量才是可直接执行的摄入指令，热量为其折算结果。
+  </div>
+
+  <!-- ===================== 环形仪表盘 ===================== -->
+  <section class="pd-rings">
+    <div v-for="ring in rings" :key="ring.key" class="pd-ring">
+      <div class="pd-ring-svg">
+        <svg viewBox="0 0 100 100">
+          <circle class="pd-ring-bg" cx="50" cy="50" r="40"></circle>
+          <circle class="pd-ring-fg" cx="50" cy="50" r="40"
+                  :stroke="ring.color"
+                  :stroke-dasharray="ring.dash"
+                  :stroke-dashoffset="ring.offset"></circle>
+        </svg>
+        <div class="pd-ring-num" :style="{ color: ring.color }">
+          {{ ring.showPct >= 999 ? '!' : ring.showPct + '%' }}
+        </div>
+      </div>
+      <div class="pd-ring-label">{{ ring.label }}</div>
+      <div class="pd-ring-val">{{ r0(ring.value) }} / {{ ring.target }} {{ ring.unit }}</div>
+      <div class="pd-ring-delta" :class="'st-' + ring.status">{{ ring.delta }}</div>
+    </div>
+  </section>
+
+  <!-- 净碳水 + 供能占比 -->
+  <section class="pd-bars">
+    <div class="pd-bar-card">
+      <div class="pd-bar-title">净碳水 <b :class="'st-' + netCarb.status">{{ r0(netCarb.v) }} g</b>
+        <span>参考 {{ netCarb.lo }}-{{ netCarb.hi }} g</span></div>
+      <div class="pd-bar"><div class="pd-bar-fill" :style="{ width: netCarb.w + '%', background: '#38BDF8' }"></div></div>
+      <div class="pd-bar-note">净碳水 = 总碳水 − 膳食纤维</div>
+    </div>
+    <div class="pd-bar-card">
+      <div class="pd-bar-title">供能占比</div>
+      <div class="pd-split">
+        <div v-for="m in macroSplit" :key="m.k" class="pd-split-seg"
+             :style="{ width: m.pct + '%', background: m.c }">{{ m.pct >= 8 ? m.k + ' ' + m.pct + '%' : '' }}</div>
+      </div>
+      <div class="pd-bar-note">
+        <span v-for="m in macroSplit" :key="m.k">{{ m.k }} {{ r0(m.v) }} kcal</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 补缺口建议 ===================== -->
+  <section v-if="fixList.length" class="pd-fix">
+    <div class="pd-warn-title"><i class="fa-solid fa-wand-magic-sparkles"></i> 还差多少 · 换算成具体食物</div>
+    <div v-for="fx in fixList" :key="fx.key" class="pd-fix-row">
+      <div class="pd-fix-head">{{ fx.label }} <b>还差 {{ fx.gap }} {{ fx.unit }}</b></div>
+      <div class="pd-fix-opts">
+        <button v-for="o in fx.options" :key="o.id" class="pd-fix-opt"
+                @click="quickAdd(o.id, o.grams, o.state)">
+          <b>{{ o.label }}</b>
+          <span>{{ o.grams }} g · {{ o.kcal }} kcal<template v-if="o.partial"> · 补 {{ o.covers }} {{ fx.unit }}</template></span>
+          <i class="fa-solid fa-plus pd-fix-plus"></i>
+        </button>
+      </div>
+      <div class="pd-fix-tip">点一下直接加入「{{ mealName(meal) }}」；缺口过大时按一顿上限给，标「补 X」为这一份的实际贡献</div>
+    </div>
+  </section>
+
+  <!-- ===================== 禁区预警 ===================== -->
+  <section v-if="warnings.length" class="pd-warn">
+    <div class="pd-warn-title"><i class="fa-solid fa-triangle-exclamation"></i> 禁区与纠偏</div>
+    <div v-for="(w, i) in warnings" :key="i" class="pd-warn-item" :class="'lv-' + w.lv">
+      <b>{{ w.t }}</b><span>{{ w.d }}</span>
+    </div>
+  </section>
+
+  <!-- ===================== SOP 打卡 ===================== -->
+  <section class="pd-sop">
+    <div class="pd-warn-title"><i class="fa-solid fa-list-check"></i>
+      {{ dayType === 'rest' ? '休息日执行清单' : '围训练期 SOP' }}</div>
+    <button v-for="s in sopItems" :key="s.k" class="pd-sop-item" :class="{ done: sopState[s.k] }" @click="toggleSop(s.k)">
+      <i class="fa-solid" :class="sopState[s.k] ? 'fa-circle-check' : 'fa-circle'"></i>
+      <div><b>{{ s.t }}</b><span>{{ s.d }}</span></div>
+    </button>
+  </section>
+
+  <!-- ===================== Tab ===================== -->
+  <nav class="pd-tabs">
+    <button v-for="t in [['add','录入'],['list','餐次'],['trend','趋势'],['lib','食物库'],['set','设置']]"
+            :key="t[0]" @click="setTab(t[0])" class="pd-tab" :class="{ act: tab === t[0] }">{{ t[1] }}</button>
+  </nav>
+
+  <!-- ---------- 录入 ---------- -->
+  <section v-if="tab === 'add'" class="pd-pane">
+    <div class="pd-meals">
+      <button v-for="m in mealList" :key="m.k" @click="setMeal(m.k)" class="pd-meal-btn" :class="{ act: meal === m.k }">
+        <i class="fa-solid" :class="m.icon"></i> {{ m.name }}
+      </button>
+    </div>
+    <div class="pd-adding">正在录入到 <b>{{ mealName(meal) }}</b></div>
+
+    <div class="pd-cats">
+      <button v-for="c in CATEGORIES" :key="c.key" @click="setCat(c.key)" class="pd-cat" :class="{ act: activeCat === c.key }">
+        <i class="fa-solid" :class="c.icon"></i> {{ c.name }}
+      </button>
+    </div>
+    <input class="pd-search" v-model="searchQ" placeholder="搜索食物名称…">
+
+    <div v-for="f in foodsInCat" :key="f.id" class="pd-food">
+      <div class="pd-food-head">
+        <span class="pd-food-name">
+          <button class="pd-star" :class="{ on: isFav(f.id) }" @click="toggleFav(f.id)"
+                  :title="isFav(f.id) ? '取消置顶' : '置顶到常用'">
+            <i class="fa-solid fa-star"></i>
+          </button>
+          {{ f.name }}
+        </span>
+        <span class="pd-food-n">{{ r0(per100Label(f.id).kcal) }} kcal · 蛋白 {{ r1(per100Label(f.id).p) }} g / 100g</span>
+      </div>
+      <div class="pd-food-row">
+        <select :value="draft[f.id].unitKey" @change="setUnit(f.id, $event.target.value)">
+          <option v-for="u in f.units" :key="u.k" :value="u.k">{{ u.label }}</option>
+        </select>
+        <input type="number" step="0.5" inputmode="decimal" v-model.number="draft[f.id].count">
+        <div class="pd-seg">
+          <button :class="{ act: draft[f.id].state === 'raw' }" @click="setState(f.id, 'raw')">生</button>
+          <button :class="{ act: draft[f.id].state === 'cooked' }" @click="setState(f.id, 'cooked')">熟</button>
+        </div>
+        <button class="pd-add" @click="addItem(f.id)"><i class="fa-solid fa-plus"></i></button>
+      </div>
+      <div class="pd-food-hint">
+        = {{ r0(gramsOf(f.id)) }} g · {{ r0(per100Of(f.id, draft[f.id].state).kcal * gramsOf(f.id) / 100) }} kcal
+        · 蛋白 {{ r1(per100Of(f.id, draft[f.id].state).p * gramsOf(f.id) / 100) }} g
+      </div>
+      <div v-if="isInsensitive(f.id)" class="pd-food-sub">该食物生熟营养无差异，切换不影响计算</div>
+      <div v-else-if="f.note" class="pd-food-sub">{{ f.note }}</div>
+    </div>
+  </section>
+
+  <!-- ---------- 餐次明细 ---------- -->
+  <section v-if="tab === 'list'" class="pd-pane">
+    <div v-if="!itemCount" class="pd-empty">今日还没有记录，去「录入」添加第一项。</div>
+
+    <div v-for="mr in mealRows" :key="mr.k" class="pd-meal-block">
+      <div class="pd-meal-head">
+        <i class="fa-solid" :class="mr.icon"></i>
+        <b>{{ mr.name }}</b>
+        <span class="pd-meal-p" :class="{ ok: mr.p >= 30 && mr.p <= 60, low: mr.p > 0 && mr.p < 30 }">
+          蛋白 {{ r0(mr.p) }} g
+        </span>
+        <span class="pd-meal-k">{{ r0(mr.kcal) }} kcal</span>
+      </div>
+      <div v-if="!mr.count" class="pd-meal-empty">—</div>
+      <div v-for="it in mr.items" :key="it.id" class="pd-item">
+        <div class="pd-item-main">
+          <b>{{ it.name }}</b>
+          <span>{{ it.count }} {{ it.unitLabel }} · {{ it.grams }} g · {{ it.state === 'raw' ? '生重' : '熟重' }}</span>
+        </div>
+        <div class="pd-item-kcal">{{ r0(per100Of(it.foodId, it.state).kcal * it.grams / 100) }} kcal</div>
+        <select class="pd-item-meal" :value="it.meal" @change="moveMeal(it, $event.target.value)">
+          <option v-for="m in mealList" :key="m.k" :value="m.k">{{ m.name }}</option>
+        </select>
+        <div class="pd-item-ops">
+          <button @click="bumpGrams(it, -10)">-10</button>
+          <button @click="bumpGrams(it, 10)">+10</button>
+          <button class="del" @click="removeItem(it.id)"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pd-note pd-note-box">
+      每餐 30-45 g 蛋白为均匀分布基准。单餐低于 30 g 标黄，高于 60 g 说明该餐偏重。
+    </div>
+  </section>
+
+  <!-- ---------- 趋势 ---------- -->
+  <section v-if="tab === 'trend'" class="pd-pane">
+    <div class="pd-legend">
+      <span><i style="background:#10B981"></i>蛋白质达成率</span>
+      <span><i style="background:#A78BFA"></i>热量达成率</span>
+      <span class="pd-legend-note">虚线 = 100% 达标</span>
+    </div>
+    <div class="pd-trend">
+      <div v-for="d in trendDays" :key="d.date" class="pd-tday">
+        <div class="pd-tbars">
+          <div class="pd-tbar" :style="{ height: d.pH + '%', background: '#10B981' }"></div>
+          <div class="pd-tbar" :style="{ height: d.kH + '%', background: '#A78BFA' }"></div>
+        </div>
+        <div class="pd-tlabel">{{ d.label }}</div>
+        <div class="pd-tpct" :class="{ none: !d.has }">{{ d.has ? d.pPct + '%' : '—' }}</div>
+      </div>
+    </div>
+    <div class="pd-trend-note">柱高封顶 150%；空白日表示当天没有任何记录。</div>
+
+    <div v-if="weightTrend.length" class="pd-card" style="margin-top:10px">
+      <div class="pd-card-title">体重曲线（近 {{ weightTrend.length }} 次记录）</div>
+      <div class="pd-wtrend">
+        <div v-for="w in weightTrend" :key="w.date" class="pd-wday">
+          <div class="pd-wbar" :style="{ height: w.h + '%' }"></div>
+          <span>{{ w.v }}</span>
+        </div>
+      </div>
+      <div class="pd-bar-note">每次修改体重都会记录一条，同日覆盖。</div>
+    </div>
+  </section>
+
+  <!-- ---------- 食物库 ---------- -->
+  <section v-if="tab === 'lib'" class="pd-pane">
+    <button class="pd-btn primary" @click="openNewFood()"><i class="fa-solid fa-plus"></i> 新增自定义食物</button>
+    <div v-for="c in CATEGORIES" :key="c.key" class="pd-lib-cat">
+      <div class="pd-cat-title"><i class="fa-solid" :class="c.icon"></i> {{ c.name }}</div>
+      <div v-for="f in allFoods.filter(x => x.cat === c.key)" :key="f.id" class="pd-lib-item">
+        <div class="pd-lib-main">
+          <b>{{ f.name }}</b>
+          <span>蛋白 {{ r1(f.n.p) }} · 脂肪 {{ r1(f.n.f) }} · 碳水 {{ r1(f.n.c) }} · 纤维 {{ r1(f.n.fiber) }} · {{ r0(f.n.kcal) }} kcal / 100g</span>
+        </div>
+        <div class="pd-lib-ops">
+          <button @click="openEditFood(f)"><i class="fa-solid fa-pen"></i></button>
+          <button v-if="f.overridden" @click="resetOverride(f.id)" title="恢复默认"><i class="fa-solid fa-rotate-left"></i></button>
+          <button v-if="f.custom" class="del" @click="removeCustomFood(f.id)"><i class="fa-solid fa-trash"></i></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------- 设置 ---------- -->
+  <section v-if="tab === 'set'" class="pd-pane">
+    <div class="pd-card">
+      <div class="pd-card-title">头像</div>
+      <div class="pd-avatars">
+        <div v-for="u in users" :key="u" class="pd-avatar-cell">
+          <img :src="avatarOf(u)" alt="">
+          <b>{{ u }}</b>
+          <button class="pd-btn" @click="openAvatarModal(u)">更换</button>
+          <button class="pd-btn" @click="resetAvatar(u)">默认</button>
+        </div>
+      </div>
+      <div class="pd-note">支持 iPhone 的 HEIC（自动转码），上传后压缩至 256px。不抠图也没关系，会做圆形裁切。</div>
+    </div>
+
+    <div class="pd-card">
+      <div class="pd-card-title">鼓励形象</div>
+      <div class="pd-cheer-preview">
+        <div class="pd-cheer-fig" :class="[cheerMedia && cheerMedia.transparent ? 'no-bg' : 'must-crop', cheerMedia && cheerMedia.crop === false ? 'crop-none' : '']">
+          <video v-if="cheerMedia && cheerMedia.isVideo" :src="cheerMedia.url" autoplay loop muted playsinline webkit-playsinline></video>
+          <img v-else-if="cheerMedia" :src="cheerMedia.url" alt="">
+          <i v-else class="fa-solid fa-medal"></i>
+        </div>
+        <div class="pd-note" style="margin:0">
+          当前：{{ cheerMedia ? (cheerMedia.isVideo ? '视频' : '图片') : '默认勋章' }}
+          <span v-if="cheerMedia && cheerMedia.transparent"> · 透明</span>
+        </div>
+      </div>
+      <button class="pd-btn primary" @click="openCheerMediaModal()"><i class="fa-solid fa-upload"></i> 上传鼓励形象</button>
+      <button v-if="cheerMedia" class="pd-btn" @click="resetCheerMedia()">恢复默认</button>
+      <div class="pd-note">
+        达标时会自动弹出鼓励卡。<b>推荐透明底 WebP 动画</b>或 APNG；MP4 不支持透明（会自动降级为圆形裁切）；
+        GIF 仅 1 位透明，边缘会有白锯齿。
+      </div>
+    </div>
+
+    <div class="pd-card">
+      <div class="pd-card-title">身体与周期</div>
+      <label class="pd-fld wide"><span>体重（kg）</span>
+        <input type="number" step="0.5" inputmode="decimal" v-model.number="weight"></label>
+      <div class="pd-note">蛋白目标按体重折算：{{ dayType === 'rest' ? '休息日 1.8 g/kg' : (dayType === 'lower' ? '下肢日 2.3 g/kg' : '上肢日 2.0 g/kg') }}
+        = {{ targets.protein }} g</div>
+    </div>
+
+    <div class="pd-card">
+      <div class="pd-card-title">目标微调</div>
+      <div class="pd-note">默认由体重 × 系数自动计算。如需固定值，可在此覆盖（留空 = 自动）。</div>
+      <button class="pd-btn" @click="openOverride()">编辑目标覆盖值</button>
+      <button v-if="hasOverride" class="pd-btn" @click="clearOverride()">恢复自动计算</button>
+    </div>
+
+    <div class="pd-card">
+      <div class="pd-card-title"><i class="fa-solid fa-clock"></i> 训练时段与围训练期</div>
+      <div class="pd-note">
+        围训练期 = 训练前 {{ trainCfg.preHours }} 小时 ~ 训练后 {{ trainCfg.postHours }} 小时。
+        只有落在窗口内的餐次才对<b>可见脂肪</b>（坚果/牛油果/食用油）报红。
+      </div>
+
+      <label class="pd-fld wide" style="flex-direction:row;align-items:center;justify-content:space-between;">
+        <span>启用时段判定</span>
+        <input type="checkbox" v-model="trainCfg.enabled" @change="setTrainCfg({enabled: trainCfg.enabled})" style="width:18px;height:18px;">
+      </label>
+      <div v-if="!trainCfg.enabled" class="pd-note">关闭后退回保守口径：一律锁「练前 / 练后」两个餐次。</div>
+
+      <div v-if="trainCfg.enabled">
+        <div class="pd-row2">
+          <label class="pd-fld"><span>训练开始</span>
+            <input type="time" v-model="trainCfg.start" @change="setTrainCfg({start: trainCfg.start})"></label>
+          <label class="pd-fld"><span>训练结束</span>
+            <input type="time" v-model="trainCfg.end" @change="setTrainCfg({end: trainCfg.end})"></label>
+        </div>
+        <label class="pd-fld wide"><span>练后窗口时长</span>
+          <select v-model.number="trainCfg.postHours" @change="setTrainCfg({postHours: trainCfg.postHours})">
+            <option :value="1">1 小时（宽松 · 只锁 GLUT4 高峰段）</option>
+            <option :value="2">2 小时（严格 · 覆盖完整糖原再合成期）</option>
+          </select></label>
+        <div class="pd-row2">
+          <label class="pd-fld"><span>早餐时刻</span>
+            <input type="time" v-model="trainCfg.breakfast" @change="setTrainCfg({breakfast: trainCfg.breakfast})"></label>
+          <label class="pd-fld"><span>午餐时刻</span>
+            <input type="time" v-model="trainCfg.lunch" @change="setTrainCfg({lunch: trainCfg.lunch})"></label>
+        </div>
+        <div class="pd-row2">
+          <label class="pd-fld"><span>晚餐时刻</span>
+            <input type="time" v-model="trainCfg.dinner" @change="setTrainCfg({dinner: trainCfg.dinner})"></label>
+          <label class="pd-fld"><span>加餐时刻</span>
+            <input type="time" v-model="trainCfg.snack" @change="setTrainCfg({snack: trainCfg.snack})"></label>
+        </div>
+        <div class="pd-peri-box">
+          <div class="pd-peri-line"><span>当前围训练期</span><b>{{ periWindow.text }}</b></div>
+          <div class="pd-peri-line"><span>受控餐次</span><b>{{ periMealNames }}</b></div>
+          <div class="pd-peri-line"><span>参考时刻</span><b class="dim">
+            练前 {{ fmtMin(mealTimeOf('pre')) }} · 练后 {{ fmtMin(mealTimeOf('post')) }}
+          </b></div>
+        </div>
+        <div class="pd-note">
+          Leo 常态（03:00-05:00 训练、06:30 早餐）配 <b>1 小时</b>窗口 → 06:00 出窗口，
+          早餐已解冻，与「围训关系不大」一致。若想更保守，改选 2 小时。
+        </div>
+      </div>
+    </div>
+
+    <div class="pd-card">
+      <div class="pd-card-title">单位锚点记忆</div>
+      <div class="pd-note">每个食物的单位、数量、生熟都会记住上次选择；常用食物可点星标置顶。切换用户互不影响。</div>
+    </div>
+
+    <div class="pd-card">
+      <div class="pd-card-title">数据</div>
+      <button class="pd-btn" @click="exportJson()"><i class="fa-solid fa-download"></i> 导出 JSON 备份</button>
+      <div class="pd-note">共 {{ itemCount }} 条今日记录；所有数据自动保存本机并同步云端 KV。</div>
+    </div>
+  </section>
+
+  <!-- ===================== 弹窗：鼓励卡 ===================== -->
+  <div v-if="cheerModal.visible" class="pd-cheer-mask" @click.self="closeCheer()">
+    <div class="pd-cheer-card" :class="'lv-' + cheerModal.lv">
+      <div class="pd-cheer-glow"></div>
+      <div class="pd-cheer-fig big"
+           :class="[cheerMedia && cheerMedia.transparent ? 'no-bg' : 'must-crop', cheerMedia && cheerMedia.crop === false ? 'crop-none' : '']">
+        <video v-if="cheerMedia && cheerMedia.isVideo" :src="cheerMedia.url" autoplay loop muted playsinline webkit-playsinline></video>
+        <img v-else-if="cheerMedia" :src="cheerMedia.url" alt="">
+        <i v-else class="fa-solid fa-medal"></i>
+      </div>
+      <div class="pd-cheer-user">
+        <img :src="currentAvatar" alt="">
+        <span>{{ user }}</span>
+      </div>
+      <h3>{{ cheerModal.title }}</h3>
+      <p>{{ cheerModal.desc }}</p>
+      <div class="pd-cheer-stats">
+        <span>已达成 <b>{{ cheerModal.done }}</b> / {{ cheerModal.total }} 项</span>
+        <span>蛋白 <b>{{ r0(totals.p) }}</b> / {{ targets.protein }} g</span>
+        <span>热量 <b>{{ r0(totals.kcal) }}</b> / {{ targets.kcal }}</span>
+      </div>
+      <div class="pd-cheer-ops">
+        <button class="pd-btn" @click="openCheerMediaModal()">换形象</button>
+        <button class="pd-btn primary" @click="closeCheer()">好，继续</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：鼓励形象上传 ===================== -->
+  <div v-if="cheerMediaModal.visible" class="pd-mask" @click.self="cheerMediaModal.visible = false">
+    <div class="pd-modal">
+      <div class="pd-modal-title">上传鼓励形象</div>
+
+      <div class="pd-cheer-preview" style="margin-bottom:10px">
+        <div class="pd-cheer-fig"
+             :class="[cheerTransparent ? 'no-bg' : 'must-crop', cheerCrop ? '' : 'crop-none']">
+          <video v-if="cheerMediaModal.isVideo" :src="cheerMediaModal.tempUrl || (cheerMedia && cheerMedia.url)" autoplay loop muted playsinline webkit-playsinline></video>
+          <img v-else-if="cheerMediaModal.tempUrl || cheerMedia" :src="cheerMediaModal.tempUrl || cheerMedia.url" alt="">
+          <i v-else class="fa-solid fa-medal"></i>
+        </div>
+      </div>
+
+      <div v-if="cheerMediaModal.mp4Warn" class="pd-warn-item lv-red" style="margin-bottom:10px">
+        <b>MP4 不支持透明</b>
+        <span>标准 MP4（H.264/HEVC）没有 alpha 通道，透明区会被填成黑底或白底。已自动保留圆形裁切兜底。
+        想要会动的透明形象，请改用 <b>WebM（VP9 alpha）</b>或 <b>APNG / 动画 WebP</b>。</span>
+      </div>
+
+      <div class="pd-note" style="margin-top:0">
+        推荐：抠图后的<b>透明 WebP 动画</b>或 APNG（96-256px 即可），人物无边框漂浮。<br>
+        不抠也能用：圆形裁切会裁掉大部分方形背景，但头发与抬起的手臂边缘会一起被裁。
+      </div>
+
+      <div class="pd-grid2">
+        <label class="pd-fld"><span>裁切</span>
+          <select v-model="cheerCrop">
+            <option :value="true">圆形裁切</option>
+            <option :value="false">完整显示</option>
+          </select>
+        </label>
+        <label class="pd-fld"><span>透明</span>
+          <select v-model="cheerTransparent" :disabled="!!cheerMediaModal.mp4Warn">
+            <option :value="true">已抠图（去边框）</option>
+            <option :value="false">不透明（保留底衬）</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="pd-filebtn">
+        选择图片 / 视频
+        <input type="file" accept="image/*,video/*" @change="handleCheerFile" class="hidden">
+      </label>
+
+      <div class="pd-modal-ops">
+        <button class="pd-btn" @click="resetCheerMedia()">恢复默认</button>
+        <div>
+          <button class="pd-btn" @click="cheerMediaModal.visible = false">取消</button>
+          <button class="pd-btn primary" @click="saveCheerMedia()">存定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：头像 ===================== -->
+  <div v-if="avatarModal.visible" class="pd-mask" @click.self="avatarModal.visible = false">
+    <div class="pd-modal">
+      <div class="pd-modal-title">定制 {{ avatarModal.targetUser }} 头像</div>
+      <div class="pd-avatar-edit">
+        <img :src="avatarModal.tempUrl || currentAvatar" alt="">
+      </div>
+      <div v-if="!cloudOk" class="pd-warn-item lv-red" style="margin-bottom:10px">
+        <b>云端 KV 未绑定</b><span>头像只存本机，换设备或清缓存会丢失。</span>
+      </div>
+      <label class="pd-filebtn">
+        {{ avatarModal.changed ? '重新选择照片' : '选择照片上传' }}
+        <input type="file" accept="image/*,.heic,.heif" capture="environment" @change="handleAvatarFile" class="hidden">
+      </label>
+      <div class="pd-note" style="margin-top:6px">
+        {{ avatarModal.changed ? '已就绪，点「存定」生效' : '可直接拍照或从相册选一张' }} · 自动压缩至 256px，iPhone 的 HEIC 也会自动转码
+      </div>
+      <div class="pd-modal-ops">
+        <button class="pd-btn" @click="resetAvatar(avatarModal.targetUser)">恢复默认</button>
+        <div>
+          <button class="pd-btn" @click="avatarModal.visible = false">取消</button>
+          <button class="pd-btn primary" @click="saveAvatar()" :disabled="avatarModal.saving">
+            {{ avatarModal.saving ? '保存中…' : '存定' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：食物编辑 ===================== -->
+  <div v-if="foodEdit.open" class="pd-mask" @click.self="foodEdit.open = false">
+    <div class="pd-modal">
+      <div class="pd-modal-title">{{ foodEdit.isNew ? '新增食物' : '编辑营养（每 100g）' }}</div>
+      <label class="pd-fld wide"><span>名称</span><input v-model="foodEdit.name" placeholder="如：卤牛肉"></label>
+      <label class="pd-fld wide"><span>分类</span>
+        <select v-model="foodEdit.cat">
+          <option v-for="c in CATEGORIES" :key="c.key" :value="c.key">{{ c.name }}</option>
+        </select></label>
+      <div class="pd-grid5">
+        <label class="pd-fld"><span>蛋白 g</span><input type="number" step="0.1" inputmode="decimal" v-model.number="foodEdit.p"></label>
+        <label class="pd-fld"><span>脂肪 g</span><input type="number" step="0.1" inputmode="decimal" v-model.number="foodEdit.f"></label>
+        <label class="pd-fld"><span>碳水 g</span><input type="number" step="0.1" inputmode="decimal" v-model.number="foodEdit.c"></label>
+        <label class="pd-fld"><span>纤维 g</span><input type="number" step="0.1" inputmode="decimal" v-model.number="foodEdit.fiber"></label>
+        <label class="pd-fld"><span>热量 kcal</span><input type="number" inputmode="numeric" v-model.number="foodEdit.kcal"></label>
+      </div>
+      <div class="pd-modal-ops">
+        <button class="pd-btn" @click="foodEdit.open = false">取消</button>
+        <button class="pd-btn primary" @click="saveFoodEdit()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：目标覆盖 ===================== -->
+  <div v-if="showOverride" class="pd-mask" @click.self="showOverride = false">
+    <div class="pd-modal">
+      <div class="pd-modal-title">覆盖今日目标（留空 = 自动计算）</div>
+      <div class="pd-grid5">
+        <label class="pd-fld"><span>蛋白 g</span><input type="number" inputmode="numeric" v-model="ovForm.protein"></label>
+        <label class="pd-fld"><span>碳水 g</span><input type="number" inputmode="numeric" v-model="ovForm.carb"></label>
+        <label class="pd-fld"><span>脂肪 g</span><input type="number" inputmode="numeric" v-model="ovForm.fat"></label>
+        <label class="pd-fld"><span>热量 kcal</span><input type="number" inputmode="numeric" v-model="ovForm.kcal"></label>
+        <label class="pd-fld"><span>蔬菜 g</span><input type="number" inputmode="numeric" v-model="ovForm.vege"></label>
+      </div>
+      <div class="pd-modal-ops">
+        <button class="pd-btn" @click="clearOverride()">清空</button>
+        <button class="pd-btn primary" @click="saveOverride()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== Toast ===================== -->
+  <div v-if="toastMsg" class="pd-toast">{{ toastMsg }}</div>
+</div>
+
+<script src="/foods.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

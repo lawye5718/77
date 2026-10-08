@@ -1,0 +1,15 @@
+{
+  "name": "pulse-diet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PULSE DIET 增肌饮食日志 —— Cloudflare Workers Assets + KV",
+  "scripts": {
+    "validate": "node validate.js",
+    "mount": "node mount_test.mjs",
+    "live": "node live_check.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}
