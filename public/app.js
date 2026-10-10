@@ -144,6 +144,17 @@ function buildTargets(weight, dayType, adjustPct, override) {
 }
 
 /* ---------- 汇总 ---------- */
+/* 单条克数硬上限：录入端已拦，但历史上曾混进 50000 g 这类脏数据
+ * （表现为「新的一天上来就超」）。汇总端按同一口径再拦一次：
+ * 越界的条目不计入统计，同时界面弹红色横幅提示清理——不静默删用户数据，
+ * 也不让一条脏数据污染全天的判断。 */
+const MAX_ITEM_GRAMS = 5000;
+function isBadItem(it, foodMap) {
+  if (!it || typeof it !== 'object') return true;
+  const g = Number(it.grams);
+  if (!Number.isFinite(g) || g <= 0 || g > MAX_ITEM_GRAMS) return true;
+  return !foodMap || !foodMap[it.foodId];
+}
 function countedItems(items) {
   return (items || []).filter(it => it && !it.pendingConfirmation);
 }
@@ -154,7 +165,7 @@ function sumItems(items, foodMap) {
     const food = (foodMap || {})[it.foodId];
     const n = per100(food, it.state);
     const grams = Number(it.grams);
-    const g = Number.isFinite(grams) && grams > 0 ? grams : 0;
+    const g = Number.isFinite(grams) && grams > 0 && grams <= MAX_ITEM_GRAMS ? grams : 0;
     const k = g / 100;
     s.p += n.p * k; s.f += n.f * k; s.c += n.c * k; s.fiber += n.fiber * k; s.kcal += n.kcal * k;
     s.grams += g;
@@ -246,7 +257,10 @@ function buildWarnings(totals, t, dayType, items, foodMap, unmet, periMeals) {
       // 而在乳清吸收过快：血浆亮氨酸骤升骤降，且饱腹感差。
       d: '已记 ' + r0(pw.grams) + ' g。休息日仍需维持肌肉合成（MPS），但建议停用快吸收的乳清，改用天然肉类提供缓慢、持续的氨基酸流（4-6 小时），同时增加饱腹感。'
     });
-    if (totals.p < 130) w.push({ lv: 'red', t: '蛋白质不足', d: '仅 ' + r0(totals.p) + ' g。低于 130 g 会触发肌肉分解，这是休息日的红线。' });
+    // 130 g 是 78 kg 锚点下的红线（1.67 g/kg）。换到 58 kg 的琳达应同比缩放，
+    // 否则小体重用户天天假报红、大体重用户永远不报。蛋白目标 1.8 g/kg → 红线 0.92 倍。
+    const pFloor = Math.max(90, Math.round((Number(t.protein) || 140) * 0.92));
+    if (totals.p < pFloor) w.push({ lv: 'red', t: '蛋白质不足', d: '仅 ' + r0(totals.p) + ' g。低于 ' + pFloor + ' g 会触发肌肉分解，这是休息日的红线。' });
     if (totals.nut > 30) w.push({ lv: 'amber', t: '坚果过量', d: '已 ' + r0(totals.nut) + ' g，超过 20-30 g 上限，会挤占蛋白质空间。' });
     const gap = t.kcal - totals.kcal;
     if (totals.kcal > 0 && gap > 600) w.push({ lv: 'red', t: '热量缺口过大', d: '缺口 ' + r0(gap) + ' kcal，超过 600 kcal 会触发皮质醇升高。' });
@@ -397,8 +411,8 @@ createApp({
       return {
         activeUser: 'Leo',
         users: {
-          Leo:  { weight: 78, lastDayType: 'lower', lastAdjust: 0, itemPrefs: {}, favs: [], targetOverride: null, weights: [] },
-          琳达: { weight: 58, lastDayType: 'upper', lastAdjust: 0, itemPrefs: {}, favs: [], targetOverride: null, weights: [] }
+          Leo:  { weight: 78, lastDayType: 'lower', lastAdjust: 0, itemPrefs: {}, favs: [], favMeta: {}, favSeeded: false, targetOverride: null, weights: [] },
+          琳达: { weight: 58, lastDayType: 'upper', lastAdjust: 0, itemPrefs: {}, favs: [], favMeta: {}, favSeeded: false, targetOverride: null, weights: [] }
         },
         /* 训练时段：用于判定哪些餐次落在「围训练期」
          * Leo 常态：凌晨 03:00-05:00 训练，06:30 后早餐。
@@ -406,18 +420,37 @@ createApp({
         train: { enabled: true, start: '03:00', end: '05:00', preHours: 2, postHours: 1, breakfast: '06:30', lunch: '12:00', dinner: '18:30', snack: '15:00' }
       };
     }
+    /* 档案归一化：本机档案、云端拉回的档案都要过一遍。
+     * 尤其是云端档案可能是旧版本写的（缺 favMeta / favSeeded），
+     * 不同步补齐的话「常见食物」展区会整片空白。 */
+    function normalizePrefs(p) {
+      if (!p || !p.users) return p;
+      Object.keys(p.users).forEach(u => {
+        const o = p.users[u];
+        if (!o) return;
+        if (!o.favs) o.favs = [];
+        if (!o.weights) o.weights = [];
+        if (!o.itemPrefs) o.itemPrefs = {};
+        if (!o.favMeta) o.favMeta = {};
+        // 首次使用：播一份「常见食物」起点。已有常用列表的用户一律不动。
+        if (!o.favSeeded) {
+          if (o.favs.length) { o.favSeeded = true; }
+          else {
+            const valid = (window.COMMON_PRESETS || []).filter(id => (window.FOOD_DB || []).some(f => f.id === id));
+            o.favs = valid.slice();
+            valid.forEach(id => { o.favMeta[id] = { uses: 0, manual: false, hidden: false, preset: true }; });
+            o.favSeeded = true;
+          }
+        }
+      });
+      return p;
+    }
     if (!prefs.value) {
       let p = null;
       try { p = JSON.parse(LS.get('diet_prefs', 'null') || 'null'); } catch (e) {}
       prefs.value = (p && p.users) ? p : defaultPrefs();
       if (!prefs.value.train) prefs.value.train = defaultPrefs().train;
-      // 兼容旧版：补齐新增字段
-      Object.keys(prefs.value.users).forEach(u => {
-        const o = prefs.value.users[u];
-        if (!o.favs) o.favs = [];
-        if (!o.weights) o.weights = [];
-        if (!o.itemPrefs) o.itemPrefs = {};
-      });
+      normalizePrefs(prefs.value);
     }
     const up = computed(() => prefs.value.users[user.value] || prefs.value.users.Leo);
 
@@ -685,21 +718,40 @@ createApp({
     }
 
     /* ---------- 已摄入食物栏：按五大类分区 ---------- */
+    /* 分类以食物库当前分类为准（用户改过自定义食物分类后不会串区） */
+    const catKeyOf = (it) => { const f = foodMap.value[it.foodId]; return (f && f.cat) || it.cat || ''; };
     const intakeSections = computed(() => {
       const out = [];
       (window.CATEGORIES || []).forEach(c => {
-        const items = countedItems(day.value.items).filter(it => it.cat === c.key);
+        const items = countedItems(day.value.items).filter(it => catKeyOf(it) === c.key);
         if (!items.length) return;
-        let grams = 0, kcal = 0;
+        let grams = 0, kcal = 0, p = 0;
         items.forEach(it => {
           const g = Number(it.grams) || 0;
-          grams += g;
-          kcal += (per100(foodMap.value[it.foodId], it.state).kcal || 0) * g / 100;
+          const n = per100(foodMap.value[it.foodId], it.state);
+          grams += g; kcal += n.kcal * g / 100; p += n.p * g / 100;
         });
-        out.push({ key: c.key, name: c.name, icon: c.icon, items: items, grams: r0(grams), kcal: r0(kcal) });
+        out.push({ key: c.key, name: c.name, icon: c.icon, items: items, grams: r0(grams), kcal: r0(kcal), p: r1(p) });
       });
       return out;
     });
+    /* 待确认条目（复制昨日 / 拉入昨天）单独成块：它们不计入统计，
+     * 藏在录入页里极容易被忘掉，放到已摄入展板顶部逐条处理。 */
+    const pendingItems = computed(() => (day.value.items || []).filter(it => it && it.pendingConfirmation));
+    /* 脏数据体检：历史上混入的 50000 g 之类（也含已被删除的自定义食物残留）。
+     * 汇总端已把它们拦下不计入统计，这里显式列出并给一键清理——
+     * 不静默删用户数据，也不让一条脏数据污染全天判断。 */
+    const badItems = computed(() => (day.value.items || []).filter(it => isBadItem(it, foodMap.value)));
+    function repairBadItems() {
+      const bad = badItems.value;
+      if (!bad.length) { showToast('没有异常记录'); return; }
+      const ids = {};
+      bad.forEach(it => { if (it && it.id) ids[it.id] = true; });
+      const d = ensureDay();
+      d.items = (d.items || []).filter(it => !it || !ids[it.id]);
+      save();
+      showToast('已清理 ' + bad.length + ' 条异常记录（可用撤销删除恢复最近一条）');
+    }
     /* 点分项小结 → 直接进入已摄入食物栏的对应分区（不再弹窗） */
     function gotoIntakeCat(cat) {
       const key = (cat === 'kcal' || cat === '') ? '' : cat;
@@ -749,6 +801,12 @@ createApp({
       return (unitOf(f, d.unitKey).g || 1) * (Number(d.count) || 0);
     }
     function unitLabelOf(foodId) { const f = foodMap.value[foodId]; const d = draft.value[foodId]; return f && d ? unitOf(f, d.unitKey).label : ''; }
+    /* 常用卡上直接显示「2 块 = 240 g」：与已确认与否无关，只做预览 */
+    function gramsPreview(foodId) {
+      const f = foodMap.value[foodId]; if (!f) return 0;
+      const d = draft.value[foodId]; if (!d) return 0;
+      return r1((unitOf(f, d.unitKey).g || 1) * (Number(d.count) || 0));
+    }
     function setUnit(foodId, k) {
       const f = foodMap.value[foodId]; const d = draft.value[foodId];
       if (!f || !d) return;
@@ -760,8 +818,8 @@ createApp({
     function setState(foodId, s) { if (draft.value[foodId]) { draft.value[foodId].state = s; draft.value[foodId].confirmed = true; } }
 
     /* 单条克数防线：数量框误填成 50000 这类荒谬值会让碳水/脂肪瞬间爆表，
-     * 而且极难发现（表现为「新的一天上来就超」）。超过上限直接拦下不让入库。 */
-    const MAX_ITEM_GRAMS = 5000;
+     * 而且极难发现（表现为「新的一天上来就超」）。超过上限直接拦下不让入库。
+     * （常量 MAX_ITEM_GRAMS 定义在文件顶部，汇总端与录入端共用同一口径） */
     function guardGrams(g) {
       const n = Number(g) || 0;
       if (!(n > 0)) { showToast('请输入有效数量'); return 0; }
@@ -932,43 +990,120 @@ createApp({
       showToast('已确认计入：' + it.name);
     }
     function bumpGrams(it, delta) {
-      it.grams = Math.min(MAX_ITEM_GRAMS, Math.max(0, r1((Number(it.grams) || 0) + delta)));
-      it.count = it.grams;
+      const f = foodMap.value[it.foodId];
+      const ug = f ? (unitOf(f, it.unitKey).g || 1) : 1;
+      const g = clamp(r1((Number(it.grams) || 0) + delta), 0, MAX_ITEM_GRAMS);
+      it.grams = g;
+      it.count = r1(g / (ug || 1));    // 单位保持：2 块 = 240 g，+10 后是 2.1 块 = 250 g
       save(); maybeCheer();
     }
-    /* 已摄入栏里直接改克数 */
+    /* 已摄入栏里直接改克数（切回「克」单位，避免单位与克数对不上） */
     function setItemGrams(it, v) {
       const n = Number(v) || 0;
       if (n <= 0) { showToast('克数需大于 0'); return; }
       if (n > MAX_ITEM_GRAMS) { showToast('单条不能超过 ' + MAX_ITEM_GRAMS + ' g'); return; }
       it.grams = r1(n);
-      it.count = r1(n);
+      it.unitKey = 'g'; it.unitLabel = '克'; it.count = r1(n);
       save(); maybeCheer();
+    }
+    /* 已摄入栏里按「单位 + 份数」改量，克数由后台折算 */
+    function unitsOf(foodId) {
+      const f = foodMap.value[foodId];
+      return (f && f.units) ? f.units : [{ k: 'g', label: '克', g: 1 }];
+    }
+    function setItemUnit(it, unitKey) {
+      const f = foodMap.value[it.foodId]; if (!f) return;
+      const u = unitOf(f, unitKey); if (!u) return;
+      const g = Number(it.grams) || 0;
+      const ug = u.g || 1;
+      it.unitKey = unitKey; it.unitLabel = u.label;
+      it.count = r1(g / ug);
+      if (u.state) it.state = u.state;   // 例：燕麦切「碗(粥)」自动按熟重计
+      save(); maybeCheer();
+      showToast('已按「' + u.label + '」折算：' + r0(g) + ' g = ' + r1(g / ug) + ' ' + u.label);
+    }
+    function setItemCount(it, v) {
+      const f = foodMap.value[it.foodId]; if (!f) return;
+      const u = unitOf(f, it.unitKey);
+      const ug = (u && u.g) || 1;
+      const n = Number(v) || 0;
+      const g = ug * n;
+      if (!(g > 0)) { showToast('份数需大于 0'); return; }
+      if (g > MAX_ITEM_GRAMS) { showToast('单条不能超过 ' + MAX_ITEM_GRAMS + ' g'); return; }
+      it.count = r1(n); it.grams = r1(g);
+      save(); maybeCheer();
+    }
+    /* 行内读数：这条记录实际贡献了多少 */
+    function kcalOf(it) {
+      const g = Number(it.grams) || 0;
+      return (per100(foodMap.value[it.foodId], it.state).kcal || 0) * g / 100;
+    }
+    function pOf(it) {
+      const g = Number(it.grams) || 0;
+      return (per100(foodMap.value[it.foodId], it.state).p || 0) * g / 100;
     }
     function moveMeal(it, k) { it.meal = k; save(); showToast('已移到「' + mealName(k) + '」'); }
 
-    /* ---------- 收藏 ---------- */
-    const favs = computed(() => up.value.favs || []);
+    /* ---------- 常见食物（待选区的常用展区） ----------
+     * v5 规则：
+     *   1. 首次进入播一份常见食物作为起点（用户可随时增删，删了不再自动塞回）。
+     *   2. 同一食物累计选用 3 次 → 自动补进常用展区。
+     *   3. 常用展区里的默认数量 = 上次实际使用的量（itemPrefs 记忆，含单位与生熟）。
+     *   4. 删掉今日最后一条该食物 → 自动移出常用（手动置顶的保留）。
+     */
+    const COMMON_MAX = 18;
+    const COMMON_MIN_USES = 3;
+    const favs = computed(() => (up.value.favs || []).filter(id => !!foodMap.value[id]));
     const isFav = (id) => favs.value.indexOf(id) >= 0;
-    /* 需求：从食物库选过就进「常用」，删掉就移出「常用」；
-     * 常用食物的默认数量由 itemPrefs 记住（= 上次选择的量）。 */
+    function metaOf(id) {
+      const m = up.value.favMeta || (up.value.favMeta = {});
+      return m[id] || (m[id] = { uses: 0, manual: false, hidden: false });
+    }
+    function foodNameOf(id) { const f = foodMap.value[id]; return f ? f.name : id; }
+    /* 每次真正入库都记一次；够 3 次自动进常用（用户显式移除过的不再自动回来） */
     function markFav(id) {
       if (!id) return;
-      const a = (up.value.favs || []).slice();
-      if (a.indexOf(id) < 0) { a.unshift(id); up.value.favs = a.slice(0, 12); }
+      const m = metaOf(id);
+      m.uses = (Number(m.uses) || 0) + 1;
+      if (isFav(id) || m.hidden) return;
+      if (m.uses >= COMMON_MIN_USES) {
+        up.value.favs = [id].concat(up.value.favs || []).slice(0, COMMON_MAX);
+        showToast('「' + foodNameOf(id) + '」用过 ' + m.uses + ' 次 → 已加入常用');
+      }
     }
+    /* 删除后：今日已无该食物、且非手动置顶 → 移出常用并清零计数 */
     function unmarkFav(id) {
       if (!id) return;
+      const m = metaOf(id);
+      const still = countedItems(day.value.items).some(it => it.foodId === id);
+      if (still || m.manual) return;
       up.value.favs = (up.value.favs || []).filter(x => x !== id);
+      m.uses = 0;
     }
     const toggleFav = (id) => {
-      const a = (up.value.favs || []).slice();
-      const i = a.indexOf(id);
-      if (i >= 0) { a.splice(i, 1); showToast('已取消置顶'); }
-      else { a.unshift(id); showToast('已置顶到常用'); }
-      up.value.favs = a.slice(0, 12);
+      const m = metaOf(id);
+      if (isFav(id)) {
+        up.value.favs = (up.value.favs || []).filter(x => x !== id);
+        m.manual = false; m.hidden = true;   // 显式移除：不再被自动加回
+        showToast('已从常用移除');
+      } else {
+        up.value.favs = [id].concat(up.value.favs || []).slice(0, COMMON_MAX);
+        m.manual = true; m.hidden = false;
+        showToast('已加入常用');
+      }
       save();
     };
+    /* 常用展区：一排即点即加的卡片，数量取上次用量 */
+    const commonFoods = computed(() => favs.value.map(id => foodMap.value[id]).filter(Boolean));
+    const commonEdit = ref(false);
+    function toggleCommonEdit() { commonEdit.value = !commonEdit.value; }
+    /* 一键按「上次用量」加入当前餐次：草稿里已经是记忆的单位/数量/生熟，
+     * 直接走 addItem 即可，单位不会退化成克（例如「2 块」仍是 2 块）。 */
+    function addCommon(id) {
+      const f = foodMap.value[id]; if (!f) return;
+      if (!draft.value[id]) initDraft();
+      addItem(id);
+    }
 
     /* ---------- 复制昨日 ---------- */
     const yesterday = computed(() => {
@@ -1009,8 +1144,16 @@ createApp({
       top.sort((a, b) => favSet.indexOf(a.id) - favSet.indexOf(b.id));
       return top.concat(rest);
     });
-    /* 五大类分区展示：一次列出全部食物，按五大类顺序分节，
-     * 用户可自由上下滑动；点分类条滚动到对应分区（不再只显示当前分类那几样）。 */
+    /* 五大类分区展示 + 「默认只看常见食物」
+     * 79 条全量列表一屏塞不下，翻找成本高。默认每类只列出该类里的常见食物，
+     * 点「展开全部」再看全量；搜索时自动全量展开（否则搜到也看不见）。 */
+    const expandedCats = ref({});
+    function toggleCatExpand(k) {
+      const o = Object.assign({}, expandedCats.value);
+      o[k] = !o[k];
+      expandedCats.value = o;
+      saveSession();
+    }
     const foodSections = computed(() => {
       const q = (searchQ.value || '').trim().toLowerCase();
       const favSet = favs.value;
@@ -1021,8 +1164,15 @@ createApp({
         const top = [], rest = [];
         list.forEach(f => { (favSet.indexOf(f.id) >= 0 ? top : rest).push(f); });
         top.sort((a, b) => favSet.indexOf(a.id) - favSet.indexOf(b.id));
-        const items = top.concat(rest);
-        if (items.length) out.push({ key: c.key, name: c.name, icon: c.icon, items: items });
+        const all = top.concat(rest);
+        if (!all.length) return;
+        const open = !!q || !!expandedCats.value[c.key];
+        const shown = open ? all : (top.length ? top : all.slice(0, 4));
+        out.push({
+          key: c.key, name: c.name, icon: c.icon, items: shown,
+          total: all.length, shown: shown.length, open: open,
+          hidden: all.length - shown.length, commonCount: top.length
+        });
       });
       return out;
     });
@@ -1149,6 +1299,194 @@ createApp({
       initDraft(); save(); showToast('已保存');
     }
     function removeCustomFood(id) { customFoods.value = customFoods.value.filter(x => x.id !== id); initDraft(); save(); showToast('已删除'); }
+
+    /* ============================================================
+     * AI 导入食物
+     * ------------------------------------------------------------
+     * 流程：填食物名 → 一键复制固定 Prompt → 粘给任意 AI →
+     *      把 AI 返回的 JSON 粘回来 → 预览校验 → 入库并自动进常用。
+     *
+     * 解析必须"抗脏"：AI 的输出常常带 markdown 围栏、前后寒暄、
+     * 单引号、尾随逗号、中英文标点，甚至把 JSON 拆在几段话里。
+     * 这里逐层降级剥离，都失败了才报错，而不是让用户去手工修 JSON。
+     * ============================================================ */
+    const aiImport = ref({ open: false, name: '', json: '', preview: null, error: '', done: false });
+
+    function openAiImport() {
+      aiImport.value = { open: true, name: '', json: '', preview: null, error: '', done: false };
+    }
+    function closeAiImport() { aiImport.value.open = false; }
+
+    /* 生成 Prompt：把占位符换成用户填的食物名；没填就保留占位符并在开头提示 */
+    const aiPromptText = computed(() => {
+      const tpl = window.ADD_FOOD_PROMPT || '';
+      const n = (aiImport.value.name || '').trim();
+      return n ? tpl.split('__FOOD__').join(n) : tpl;
+    });
+    function copyPrompt() {
+      const text = aiPromptText.value;
+      const fallback = () => {
+        /* 剪贴板 API 在非 HTTPS / 旧 WebView 上不可用，退回到「选中并提示手动复制」 */
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          const okr = document.execCommand('copy');
+          document.body.removeChild(ta);
+          if (okr) { showToast('Prompt 已复制，去问 AI 吧'); return; }
+        } catch (e) {}
+        aiImport.value.json = text;      // 塞进下框，用户可手动全选复制
+        showToast('已填入下方输入框，请手动全选复制');
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast('Prompt 已复制，去问 AI 吧')).catch(fallback);
+      } else fallback();
+    }
+
+    /* ---- 从一段任意文本里抠出 JSON ---- */
+    function extractJsonObject(text) {
+      if (!text) return null;
+      let s = String(text).trim();
+      // 1) 去掉 markdown 围栏（```json ... ```），保留内部
+      const fence = /```(?:json|JSON)?\s*([\s\S]*?)```/.exec(s);
+      if (fence) s = fence[1].trim();
+      // 2) 截取第一个 { 到最后一个 }
+      const a = s.indexOf('{'), b = s.lastIndexOf('}');
+      if (a < 0 || b <= a) return null;
+      s = s.slice(a, b + 1);
+      // 3) 直接解析
+      try { return JSON.parse(s); } catch (e) {}
+      // 4) 常见瑕疵修复后再试：尾随逗号、单引号换双引号、中文引号
+      let t = s
+        .replace(/,\s*([}\]])/g, '$1')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"');
+      try { return JSON.parse(t); } catch (e) {}
+      if (t.indexOf("'") >= 0) {
+        try { return JSON.parse(t.replace(/'/g, '"')); } catch (e) {}
+      }
+      return null;
+    }
+
+    /* ---- 归一化成一个合法食物对象；返回 { ok, food, warns, err } ---- */
+    function normalizeAiFood(raw) {
+      const warns = [];
+      if (!raw || typeof raw !== 'object') return { ok: false, err: '没解析出 JSON 对象' };
+      // 有些 AI 会把结果包一层 { food: {...} } 或 { result: {...} }
+      let o = raw;
+      if (!raw.n && !raw.name) {
+        const inner = raw.food || raw.result || raw.data || raw.item;
+        if (inner && typeof inner === 'object') o = inner;
+      }
+      const name = String(o.name || o.foodName || o.名称 || '').trim();
+      if (!name) return { ok: false, err: '缺少 name（食物名称）' };
+
+      /* 分类：AI 给的白名单外的值 → 按名称关键词兜底推断 */
+      const CATS = (window.CATEGORIES || []).map(c => c.key);
+      let cat = String(o.cat || o.category || '').trim().toLowerCase();
+      if (CATS.indexOf(cat) < 0) {
+        cat = guessCat(name);
+        warns.push('AI 给的分类不在六类之内，已按名称推断为「' + catName(cat) + '」');
+      }
+
+      const base = (o.base === 'raw') ? 'raw' : 'cooked';
+
+      /* yield：非法值（0 / 负数 / 非数字 / 极端值）一律归 1，避免除零把营养算成 Infinity */
+      let y = Number(o.yield);
+      if (!Number.isFinite(y) || y <= 0) y = 1;
+      if (y > 20) { y = 1; warns.push('yield 数值异常（>20），已按 1 处理'); }
+
+      const num = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+      const nRaw = o.n && typeof o.n === 'object' ? o.n : {};
+      const n = {
+        p: num(nRaw.p), f: num(nRaw.f), c: num(nRaw.c),
+        fiber: num(nRaw.fiber), kcal: num(nRaw.kcal)
+      };
+      if (n.c < n.fiber) n.fiber = n.c;          // 纤维不可能多于总碳水
+      if (n.kcal <= 0) {
+        n.kcal = Math.round(n.p * 4 + n.f * 9 + Math.max(0, n.c - n.fiber) * 4 + n.fiber * 2);
+        warns.push('缺少 kcal，已按 4/9/4 + 纤维 2kcal 折算补算');
+      }
+
+      /* units：必须含克；每个单位都要有正的克重；state 只认 raw/cooked */
+      let units = Array.isArray(o.units) ? o.units.slice() : [];
+      units = units.map((u, i) => {
+        const g = num(u && u.g);
+        const k = String((u && u.k) || ('u' + i)).trim();
+        const label = String((u && u.label) || k).trim();
+        const st = (u && (u.state === 'raw' || u.state === 'cooked')) ? u.state : null;
+        const r = { k: k, label: label, g: g };
+        if (st) r.state = st;
+        return r;
+      }).filter(u => u.g > 0);
+      if (!units.some(u => u.k === 'g')) units.push({ k: 'g', label: '克', g: 1 });
+      if (units.length < 2) warns.push('只有「克」一个单位，建议让 AI 补上「个 / 碗 / 勺」这类自然单位');
+
+      /* tags：过滤掉 AI 自造的标签，只保留白名单 */
+      const TAGS = window.FOOD_TAGS || [];
+      let tags = Array.isArray(o.tags) ? o.tags.map(String).filter(t => TAGS.indexOf(t) >= 0) : [];
+      if (Array.isArray(o.tags) && o.tags.length !== tags.length) warns.push('已滤掉无法识别的标签');
+      // 兜底：坚果与油必须能被围训练期禁区识别
+      if (cat === 'nut' && tags.indexOf('visibleFat') < 0 && (cat === 'nut' || cat === 'fat')) {
+        /* 坚果/脂肪类靠 cat 判定即可，不强制打标 */
+      }
+
+      const id = 'ai_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const food = {
+        id, name, cat, base, yield: y, n, units, tags,
+        note: String(o.note || 'AI 导入').trim().slice(0, 120) || 'AI 导入'
+      };
+
+      /* 热量自洽体检：不拒绝入库，只提示 */
+      const tol = (window.KCAL_TOLERANCE || {})[cat] || (window.KCAL_TOLERANCE || {}).default || 40;
+      const calc = n.p * 4 + n.f * 9 + Math.max(0, n.c - n.fiber) * 4 + n.fiber * 2;
+      const dev = Math.round(n.kcal - calc);
+      if (Math.abs(dev) > tol) warns.push('热量与宏量折算相差 ' + dev + ' kcal（超出常规范围，请核对）');
+
+      return { ok: true, food, warns, dev, kcalCalc: Math.round(calc) };
+    }
+
+    /* 分类兜底推断：AI 偶尔返回中文或自造值，这里按中文名关键词归类 */
+    function guessCat(name) {
+      const s = String(name);
+      const hit = (arr) => arr.some(w => s.indexOf(w) >= 0);
+      if (hit(['核桃', '杏仁', '巴旦木', '腰果', '夏威夷果', '碧根果', '榛子', '松子', '开心果', '花生', '瓜子', '南瓜子', '芝麻', '坚果'])) return 'nut';
+      if (hit(['油'])) return 'fat';
+      if (hit(['鸡', '牛', '猪', '羊', '鱼', '虾', '蛋', '奶', '酸奶', '乳', '豆腐', '蛋白粉', '肉', '肠', '贝', '蟹', '鸭'])) return 'protein';
+      if (hit(['菜', '菠菜', '西兰花', '生菜', '番茄', '黄瓜', '萝卜', '芦笋', '青椒', '茄子', '菇', '菌', '藻', '笋', '瓜'])) return 'vege';
+      if (hit(['苹果', '香蕉', '橘', '橙', '莓', '葡萄', '梨', '桃', '西瓜', '芒果', '猕猴桃', '果'])) return 'fruit';
+      if (hit(['米', '面', '面包', '麦', '燕麦', '薯', '玉米', '豆', '粥', '粉', '南瓜', '土豆', '山药', '芋'])) return 'carb';
+      return 'protein';
+    }
+
+    function parseAiJson() {
+      const a = aiImport.value;
+      a.error = ''; a.preview = null; a.done = false;
+      const raw = extractJsonObject(a.json);
+      if (!raw) { a.error = '没找到 JSON。请确认粘贴的是 AI 返回的完整内容（以 { 开头、以 } 结尾）。'; return; }
+      const r = normalizeAiFood(raw);
+      if (!r.ok) { a.error = r.err; return; }
+      a.preview = { food: r.food, warns: r.warns, dev: r.dev, kcalCalc: r.kcalCalc };
+    }
+
+    function confirmAiImport() {
+      const a = aiImport.value;
+      if (!a.preview) return;
+      const food = a.preview.food;
+      /* 重名保护：同名食物不重复入库，改为提示已存在 */
+      const dup = customFoods.value.find(f => f.name === food.name);
+      if (dup) { a.error = '食物库里已经有「' + food.name + '」了，可直接编辑它的营养值。'; return; }
+      customFoods.value.push(food);
+      /* 自动进常用：标 manual=true，避免之后删记录时被 unmarkFav 顺手移除 */
+      const meta = metaOf(food.id);
+      meta.uses = 0; meta.manual = true; meta.hidden = false;
+      up.value.favs = [food.id].concat(up.value.favs || []).slice(0, COMMON_MAX);
+      initDraft();
+      save();
+      a.done = true;
+      showToast('已加入「' + food.name + '」并放进常用');
+    }
+
     function resetOverride(id) { const o = Object.assign({}, overrides.value); delete o[id]; overrides.value = o; initDraft(); save(); showToast('已恢复默认营养值'); }
 
     /* ---------- 目标覆盖 ---------- */
@@ -1374,14 +1712,101 @@ createApp({
       showToast('已恢复默认鼓励形象');
     }
 
-    /* ---------- 云端 ---------- */
+    /* ---------- 存储：本机即时 + 云端防抖 + 关页面强制落盘 ----------
+     * 「随时存储，关掉浏览器下次接着干」拆成三件事：
+     *   1. 任何改动立刻同步写 localStorage（同步 API，杀进程也不丢）
+     *   2. 600 ms 防抖推云端 KV；另有 30 s 兜底重推；关页面 / 切后台立即 flush
+     *   3. 连「进行到一半的工作」也存：当前页签、餐次、分类、搜索词、滚动位置，
+     *      以及每个食物已填好但还没点的单位 / 份数 / 生熟草稿
+     */
     let saveTimer = null;
+    let dirty = false;
+    const SESSION_KEY = 'diet_session_v1';
+    let sessionTimer = null;
+    const savedAt = ref(0);
+    const savedLabel = computed(() => {
+      if (!savedAt.value) return '自动保存已开启';
+      const d = new Date(savedAt.value);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ' 已存';
+    });
+    const resumed = ref(false);      // 本次打开是否恢复了上次进度
+    const resumedInfo = ref('');
+
+    function sessionPayload() {
+      const d = {};
+      Object.keys(draft.value || {}).forEach(k => {
+        const v = draft.value[k];
+        if (v && v.confirmed) d[k] = { unitKey: v.unitKey, count: v.count, state: v.state, confirmed: true };
+      });
+      let scroll = 0;
+      try { scroll = (typeof window !== 'undefined' && typeof window.scrollY === 'number') ? window.scrollY : 0; } catch (e) { scroll = 0; }
+      return {
+        user: user.value, date: dateStr.value, tab: tab.value, meal: meal.value,
+        activeCat: activeCat.value, q: searchQ.value, scroll: scroll,
+        draft: d, expanded: expandedCats.value, ts: Date.now()
+      };
+    }
+    function saveSession() {
+      try { LS.set(SESSION_KEY, JSON.stringify(sessionPayload())); } catch (e) {}
+    }
+    function scheduleSession() {
+      clearTimeout(sessionTimer);
+      sessionTimer = setTimeout(saveSession, 400);
+    }
+    /* 恢复上次进行到一半的工作（含未确认的草稿） */
+    function restoreSession() {
+      let s = null;
+      try { s = JSON.parse(LS.get(SESSION_KEY, 'null') || 'null'); } catch (e) {}
+      if (!s || typeof s !== 'object') return null;
+      if (s.user && users.indexOf(s.user) >= 0) user.value = s.user;
+      if (s.date) dateStr.value = s.date;
+      if (s.tab) tab.value = s.tab;
+      if (s.meal) meal.value = s.meal;
+      if (s.activeCat) activeCat.value = s.activeCat;
+      if (typeof s.q === 'string') searchQ.value = s.q;
+      if (s.expanded && typeof s.expanded === 'object') expandedCats.value = s.expanded;
+      let n = 0;
+      if (s.draft && typeof s.draft === 'object') {
+        Object.keys(s.draft).forEach(id => {
+          const v = s.draft[id];
+          const f = foodMap.value[id];
+          if (!f || !v) return;
+          const u0 = (f.units && f.units[0]) || { k: 'g' };
+          const unitKey = (f.units && f.units.some(u => u.k === v.unitKey)) ? v.unitKey : u0.k;
+          draft.value[id] = {
+            unitKey: unitKey,
+            count: Number(v.count) || 0,
+            state: v.state || f.base || 'cooked',
+            confirmed: !!v.confirmed
+          };
+          if (v.confirmed) n++;
+        });
+      }
+      resumed.value = true;
+      const bits = [];
+      if (s.date && s.date !== todayStr()) bits.push('日期 ' + s.date);
+      if (s.meal) bits.push('餐次 ' + mealName(s.meal));
+      if (n) bits.push(n + ' 项未提交的输入');
+      resumedInfo.value = bits.join(' · ');
+      return s;
+    }
+
     function save() {
       LS.set('diet_prefs', JSON.stringify(prefs.value));
       LS.set('diet_logs', JSON.stringify(logs.value));
       LS.set('diet_foods', JSON.stringify({ custom: customFoods.value, overrides: overrides.value }));
+      savedAt.value = Date.now();
+      dirty = true;
       clearTimeout(saveTimer);
       saveTimer = setTimeout(persist, 600);
+      scheduleSession();
+    }
+    /* 关页面 / 切后台：立刻落盘，不等 600 ms 防抖 */
+    async function flush() {
+      saveSession();
+      clearTimeout(saveTimer);
+      clearTimeout(sessionTimer);
+      if (dirty) await persist();
     }
     async function persist() {
       try {
@@ -1395,6 +1820,7 @@ createApp({
           })
         });
         const d = await res.json().catch(() => ({}));
+        dirty = false;
         if (d.failed && d.failed.indexOf('KV_UNAVAILABLE') >= 0) {
           cloudOk.value = false; cloudMsg.value = '云端 KV 未绑定：数据只保存在本机，换设备或清缓存会丢失';
         } else if (d.persisted) {
@@ -1404,6 +1830,7 @@ createApp({
         }
         return { ok: true, cloud: !!d.persisted, reason: d.failed && d.failed[0] };
       } catch (e) {
+        dirty = false;
         cloudOk.value = false; cloudMsg.value = '无法连接云端，数据仅存本机';
         return { ok: false, cloud: false, reason: '网络异常' };
       }
@@ -1418,6 +1845,7 @@ createApp({
       if (localFoods) { customFoods.value = localFoods.custom || []; overrides.value = localFoods.overrides || {}; }
       if (localMedia) media.value = Object.assign({ avatars: {}, cheer: null }, localMedia);
       initDraft();
+      const sess = restoreSession();
       try {
         const res = await fetch('/api/data');
         if (res.ok) {
@@ -1427,14 +1855,50 @@ createApp({
           }
           if (d.logs && d.logs.length) logs.value = d.logs;
           if (d.foods) { customFoods.value = d.foods.custom || []; overrides.value = d.foods.overrides || {}; }
-          if (d.prefs && d.prefs.users) prefs.value = d.prefs;
+          // 云端档案可能由旧版本写入：归一化后再用，否则常用展区会空白
+          if (d.prefs && d.prefs.users) { prefs.value = normalizePrefs(d.prefs); if (!prefs.value.train) prefs.value.train = defaultPrefs().train; }
           if (d.media) media.value = Object.assign({ avatars: {}, cheer: null }, d.media);
           initDraft();
+        } else {
+          cloudOk.value = false; cloudMsg.value = '云端返回异常（HTTP ' + res.status + '）：数据仅存本机';
         }
-      } catch (e) {}
+      } catch (e) {
+        // 打开就连不上云端也必须立刻说清楚，否则用户会以为已经同步成功
+        cloudOk.value = false; cloudMsg.value = '无法连接云端，数据仅存本机（联网后会自动重传）';
+      }
+
+      /* ---- 关页面 / 切后台 / 断网前的兜底落盘 ---- */
+      const w = (typeof window !== 'undefined') ? window : null;
+      if (w && typeof w.addEventListener === 'function') {
+        w.addEventListener('pagehide', flush);
+        w.addEventListener('beforeunload', flush);
+        const doc = w.document;
+        let lastToday = todayStr();
+        if (doc && typeof doc.addEventListener === 'function') {
+          doc.addEventListener('visibilitychange', () => {
+            if (doc.visibilityState === 'hidden') { flush(); return; }
+            // 回到前台：若已跨天且用户没主动翻日期，自动切到今天
+            const now = todayStr();
+            if (now !== lastToday) {
+              const prev = lastToday; lastToday = now;
+              if (dateStr.value === prev) { dateStr.value = now; searchQ.value = ''; showToast('已跨天：自动切到今天'); }
+            }
+          });
+        }
+        w.addEventListener('scroll', scheduleSession, { passive: true });
+        if (typeof w.setInterval === 'function') w.setInterval(() => { if (dirty) persist(); }, 30000);
+      }
+      // 恢复上次滚动位置（等一帧，等 DOM 撑开）
+      if (sess && sess.scroll) {
+        setTimeout(() => {
+          try { if (w && typeof w.scrollTo === 'function') w.scrollTo(0, sess.scroll); } catch (e) {}
+        }, 60);
+      }
+      if (sess && resumedInfo.value) showToast('已恢复上次进度：' + resumedInfo.value);
     });
 
-    watch(user, (v) => { LS.set('diet_user', v); prefs.value.activeUser = v; initDraft(); });
+    watch(user, (v) => { LS.set('diet_user', v); prefs.value.activeUser = v; initDraft(); saveSession(); });
+    watch([tab, meal, activeCat, searchQ, dateStr], () => scheduleSession());
 
     function exportJson() {
       const data = { logs: logs.value, foods: { custom: customFoods.value, overrides: overrides.value }, prefs: prefs.value, media: media.value, exportedAt: new Date().toISOString() };
@@ -1445,6 +1909,62 @@ createApp({
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
+
+    /* ---------- 弹窗期间锁死底盘滚动（Scroll Locking） ----------
+     *
+     * 现象：弹窗里上下滑动时，底层页面被连带拖动（滚动穿透）。
+     * 在 iOS Safari 上尤其明显，且单纯给 body 加 overflow:hidden **无效**——
+     * iOS 会忽略 body 的 overflow，只有把 body 变成 position:fixed 才真正锁住。
+     *
+     * 所以这里做的是「固定定位 + 记录并还原滚动位置」：
+     *   锁定：记下 scrollY → body 定位为 fixed 并上移 -scrollY（视觉上原地不动）
+     *   解锁：清掉定位 → 把 scrollTop 写回原值（页面不会跳回顶部）
+     *
+     * 两个容易被忽略的细节：
+     *   1. 桌面端滚动条消失会让内容横向跳约 15px → 用 padding-right 补上宽度。
+     *   2. 还原滚动位置用 documentElement.scrollTop，不用 window.scrollTo——
+     *      后者在部分环境（含测试用的 jsdom）会抛「Not implemented」噪声。
+     */
+    const modalStates = () => [
+      cheerModal.value.visible, cheerMediaModal.value.visible,
+      avatarModal.value.visible, foodEdit.value.open, aiImport.value.open,
+      showOverride.value, sopPick.value.visible, fixPick.value.visible,
+      intakeModal.value.visible
+    ];
+    let lockOn = false;
+    let lockY = 0;
+    function applyScrollLock(on) {
+      if (typeof document === 'undefined' || !document.body) return;
+      const b = document.body;
+      const de = document.documentElement;
+      if (on) {
+        if (lockOn) return;                       // 已在锁：多弹窗叠加时只锁一次
+        lockOn = true;
+        lockY = (typeof window !== 'undefined' && (window.scrollY || window.pageYOffset)) || (de && de.scrollTop) || 0;
+        /* 桌面端滚动条占的宽度：锁定时滚动条消失，不补会让内容横向跳一下 */
+        const raw = (typeof window !== 'undefined' && de &&
+                     typeof de.clientWidth === 'number' && typeof window.innerWidth === 'number')
+          ? (window.innerWidth - de.clientWidth) : 0;
+        const sbw = Number.isFinite(raw) && raw > 0 ? raw : 0;
+        b.style.position = 'fixed';
+        b.style.top = (-lockY) + 'px';
+        b.style.left = '0';
+        b.style.right = '0';
+        b.style.width = '100%';
+        b.style.overflow = 'hidden';
+        if (sbw > 0) b.style.paddingRight = sbw + 'px';
+      } else {
+        if (!lockOn) return;
+        lockOn = false;
+        b.style.position = ''; b.style.top = ''; b.style.left = '';
+        b.style.right = ''; b.style.width = ''; b.style.overflow = '';
+        b.style.paddingRight = '';
+        /* 先解除 fixed 再写回位置，否则写不进去 */
+        if (de) de.scrollTop = lockY;
+        if (b.scrollTop !== undefined) b.scrollTop = lockY;
+      }
+    }
+    watch(modalStates, (states) => { applyScrollLock(states.some(Boolean)); });
 
     return {
       user, users, setUser: (u) => { user.value = u; },
@@ -1462,13 +1982,19 @@ createApp({
       draft, foodsInCat, foodSections, itemsByCat, allFoods, foodMap,
       intakeModal, intakeItems, intakeTitle, openIntakeSummary, closeIntakeSummary, gotoMealList, catName,
       intakeSections, gotoIntakeCat, markFav, unmarkFav,
+      commonFoods, commonEdit, toggleCommonEdit, addCommon,
+      expandedCats, toggleCatExpand, pendingItems, badItems, repairBadItems,
+      unitsOf, setItemUnit, setItemCount, kcalOf, pOf,
+      savedLabel, savedAt, resumed, resumedInfo, flush, saveSession, restoreSession,
       fixAdj, fixGrams, bumpFix, addFix, fixPick, openFixPick, closeFixPick, pickFood,
-      unitOf, gramsOf, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, setItemGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday, confirmImportedItem,
+      unitOf, gramsOf, gramsPreview, unitLabelOf, confirmDraft, setUnit, setState, addItem, removeItem, bumpGrams, setItemGrams, quickAdd, DEFAULT_AVATARS, isManual, confirmedFoodIds, editItem, pullYesterday, confirmImportedItem,
       undoStack, undoDelete, canUndo: computed(() => undoStack.value.length > 0),
       favs, isFav, toggleFav,
       yesterday, canCopy, copyMsg, copyYesterday,
       trendDays, weightTrend, CATEGORIES: window.CATEGORIES,
       foodEdit, openNewFood, openEditFood, saveFoodEdit, removeCustomFood, resetOverride,
+      aiImport, openAiImport, closeAiImport, aiPromptText, copyPrompt, parseAiJson, confirmAiImport,
+      aiParseJson: extractJsonObject, aiNormalizeFood: normalizeAiFood,
       showOverride, ovForm, openOverride, saveOverride, clearOverride,
       hasOverride: computed(() => !!(day.value && day.value.targetOverride)),
       cloudOk, cloudMsg, toastMsg,
@@ -1485,7 +2011,8 @@ createApp({
       cheer, cheerModal, openCheerCard, closeCheer: () => { cheerModal.value.visible = false; },
       cheerMedia, cheerMediaModal, openCheerMediaModal, handleCheerFile, saveCheerMedia, resetCheerMedia,
       cheerCrop, cheerTransparent,
-      r0, r1
+      r0, r1,
+      scrollLockOn: () => modalStates().some(Boolean), applyScrollLock
     };
   }
 }).mount('#app');

@@ -6,8 +6,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#070B14">
   <title>PULSE DIET · 增肌饮食日志</title>
+  <link rel="stylesheet" href="/icon.css">
   <link rel="stylesheet" href="/style.css">
-  <script src="/vendor/tailwind.js"></script>
   <script src="/vendor/vue.js"></script>
 </head>
 <body>
@@ -55,7 +55,21 @@
       </label>
       <button class="pd-mini" @click="openAvatarModal(user)"><i class="fa-solid fa-camera"></i> 头像</button>
     </div>
+
+    <div class="pd-savebar">
+      <i class="fa-solid" :class="cloudOk ? 'fa-cloud-arrow-up' : 'fa-triangle-exclamation'"></i>
+      <b>{{ savedLabel }}</b>
+      <span v-if="resumed && resumedInfo">已恢复上次进度：{{ resumedInfo }}</span>
+      <span v-else>每次改动即时存本机并同步云端；关掉页面下次接着干</span>
+    </div>
   </header>
+
+  <!-- 异常记录（脏数据）体检：不计入统计，但显式列出 -->
+  <div v-if="badItems.length" class="pd-cloud-bad">
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <span>检测到 {{ badItems.length }} 条异常记录（克数超 5000 g、为 0 或食物已删除），已不计入统计。</span>
+    <button class="pd-bad-fix" @click="repairBadItems()">一键清理</button>
+  </div>
 
   <!-- ===================== 快捷操作 ===================== -->
   <div class="pd-quick">
@@ -241,16 +255,40 @@
     </div>
     <div class="pd-adding">正在录入到 <b>{{ mealName(meal) }}</b></div>
 
+    <!-- 常用食物：点一下即按「上次用量 + 上次单位」加入当前餐次 -->
+    <div class="pd-sec-title" id="cat-common">
+      <i class="fa-solid fa-star"></i> 常用食物<span>点一下按上次用量加入</span>
+    </div>
+    <div class="pd-common">
+      <div v-for="f in commonFoods" :key="f.id" class="pd-common-card" :class="{ 'pd-food-in': confirmedFoodIds[f.id] }">
+        <button class="pd-common-hit" @click="addCommon(f.id)" :title="'加入「' + mealName(meal) + '」'">
+          <b>{{ f.name }}</b>
+          <span>{{ draft[f.id].count }} {{ unitLabelOf(f.id) }} = {{ r0(gramsPreview(f.id)) }} g · {{ r0(per100Label(f.id).kcal * gramsPreview(f.id) / 100) }} kcal</span>
+        </button>
+        <button v-if="commonEdit" class="pd-common-x" @click="toggleFav(f.id)" title="从常用移除">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div v-if="!commonFoods.length" class="pd-meal-empty">还没有常用食物：在下方点星标添加，或某个食物用过 3 次会自动进这里。</div>
+    </div>
+    <div class="pd-common-ops">
+      <button class="pd-mini" @click="toggleCommonEdit()">{{ commonEdit ? '完成管理' : '管理常用' }}</button>
+      <span>常用食物记住上次的单位与份量；同一食物用过 3 次会自动补进来</span>
+    </div>
+
     <div class="pd-cats">
       <button v-for="c in CATEGORIES" :key="c.key" @click="scrollToCat(c.key)" class="pd-cat" :class="{ act: activeCat === c.key }">
         <i class="fa-solid" :class="c.icon"></i> {{ c.name }}
       </button>
     </div>
-    <input class="pd-search" v-model="searchQ" placeholder="搜索食物名称…">
+    <div class="pd-searchline">
+      <input class="pd-search" v-model="searchQ" placeholder="搜索食物名称…">
+      <button v-if="searchQ" class="pd-search-x" @click="searchQ = ''" title="清空搜索"><i class="fa-solid fa-xmark"></i></button>
+    </div>
 
     <div v-for="sec in foodSections" :key="sec.key" class="pd-food-sec">
       <div class="pd-sec-title" :id="'cat-' + sec.key">
-        <i class="fa-solid" :class="sec.icon"></i> {{ sec.name }}<span>{{ sec.items.length }} 项</span>
+        <i class="fa-solid" :class="sec.icon"></i> {{ sec.name }}<span>{{ sec.shown }}/{{ sec.total }} 项</span>
       </div>
       <div v-for="f in sec.items" :key="f.id" class="pd-food" :id="'food-' + f.id" :class="{ 'pd-food-in': confirmedFoodIds[f.id] }">
       <div class="pd-food-head">
@@ -282,6 +320,9 @@
       <div v-if="isInsensitive(f.id)" class="pd-food-sub">该食物生熟营养无差异，切换不影响计算</div>
       <div v-else-if="f.note" class="pd-food-sub">{{ f.note }}</div>
       </div>
+      <button class="pd-more" @click="toggleCatExpand(sec.key)">
+        {{ sec.open ? '收起 · 只看常见' : '展开全部 ' + sec.total + ' 项' }}
+      </button>
     </div>
     <div v-if="!foodSections.length" class="pd-meal-empty">没有匹配的食物，试试清空搜索词</div>
   </section>
@@ -291,20 +332,37 @@
     <div class="pd-card-title">今日已摄入（{{ countedItemCount }} 项）
       <small v-if="pendingItemCount" class="pd-pend">另有 {{ pendingItemCount }} 项待确认</small>
     </div>
-    <div v-if="!intakeSections.length" class="pd-empty">今天还没有已摄入记录，去「录入」添加第一项。</div>
+
+    <!-- 待确认：复制昨日 / 拉入昨天来的条目，确认后才计入 -->
+    <div v-if="pendingItems.length" class="pd-pending">
+      <div class="pd-warn-title"><i class="fa-solid fa-clock"></i> 待确认 {{ pendingItems.length }} 项 · 确认后才计入今日</div>
+      <div v-for="it in pendingItems" :key="it.id" class="pd-pending-row">
+        <b>{{ it.name }}</b>
+        <span>{{ it.count }} {{ it.unitLabel }} · {{ r0(it.grams) }} g · {{ r0(kcalOf(it)) }} kcal</span>
+        <button class="pd-import-action pd-import-confirm" @click="confirmImportedItem(it.id)">确认计入</button>
+        <button class="pd-import-action" @click="removeItem(it.id)">不计入</button>
+      </div>
+    </div>
+
+    <div v-if="!intakeSections.length && !pendingItems.length" class="pd-empty">今天还没有已摄入记录，去「录入」添加第一项。</div>
     <div v-for="sec in intakeSections" :key="sec.key" class="pd-intake-sec">
       <div class="pd-sec-title" :id="'intake-cat-' + sec.key">
         <i class="fa-solid" :class="sec.icon"></i> {{ sec.name }}
-        <span>{{ sec.items.length }} 项 · {{ sec.grams }} g · {{ sec.kcal }} kcal</span>
+        <span>{{ sec.items.length }} 项 · {{ sec.grams }} g · 蛋白 {{ sec.p }} g · {{ sec.kcal }} kcal</span>
       </div>
       <div v-for="it in sec.items" :key="it.id" class="pd-intake-row">
         <div class="pd-intake-main">
           <b>{{ it.name }}</b>
-          <span>{{ mealName(it.meal) }} · {{ r0(per100Of(it.foodId, it.state).kcal * it.grams / 100) }} kcal</span>
+          <span>{{ mealName(it.meal) }} · {{ r0(kcalOf(it)) }} kcal · 蛋白 {{ r1(pOf(it)) }} g</span>
         </div>
-        <input type="number" step="5" inputmode="decimal" class="pd-intake-g"
-               :value="it.grams" @change="setItemGrams(it, $event.target.value)">
-        <span class="pd-intake-unit">g</span>
+        <div class="pd-intake-ctl">
+          <input type="number" step="0.5" inputmode="decimal" class="pd-intake-count"
+                 :value="it.count" @change="setItemCount(it, $event.target.value)">
+          <select class="pd-intake-unit-sel" :value="it.unitKey" @change="setItemUnit(it, $event.target.value)">
+            <option v-for="u in unitsOf(it.foodId)" :key="u.k" :value="u.k">{{ u.label }}</option>
+          </select>
+          <span class="pd-intake-eq">= {{ r0(it.grams) }} g</span>
+        </div>
         <div class="pd-intake-ops">
           <button @click="bumpGrams(it, -10)">-10</button>
           <button @click="bumpGrams(it, 10)">+10</button>
@@ -312,7 +370,7 @@
         </div>
       </div>
     </div>
-    <div class="pd-note pd-note-box">数量可直接改，也可 ±10 微调；点 × 删除。删除后该食物会同步移出「常用食物」。</div>
+    <div class="pd-note pd-note-box">份数可按「碗 / 勺 / 个 / 块」改，后台一律折算成克；也可 ±10 微调，点 × 删除。删除后该食物会同步移出「常用食物」。</div>
   </section>
 
   <!-- ---------- 餐次明细 ---------- -->
@@ -384,7 +442,11 @@
 
   <!-- ---------- 食物库 ---------- -->
   <section v-if="tab === 'lib'" class="pd-pane">
-    <button class="pd-btn primary" @click="openNewFood()"><i class="fa-solid fa-plus"></i> 新增自定义食物</button>
+    <div class="pd-lib-actions">
+      <button class="pd-btn primary" @click="openNewFood()"><i class="fa-solid fa-plus"></i> 手动新增</button>
+      <button class="pd-btn" @click="openAiImport()"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 导入食物</button>
+    </div>
+    <div class="pd-lib-tip">「AI 导入」：复制固定 Prompt 给任意 AI，把返回的 JSON 粘回来即可，自动归类并放进常用。</div>
     <div v-for="c in CATEGORIES" :key="c.key" class="pd-lib-cat">
       <div class="pd-cat-title"><i class="fa-solid" :class="c.icon"></i> {{ c.name }}</div>
       <div v-for="f in allFoods.filter(x => x.cat === c.key)" :key="f.id" class="pd-lib-item">
@@ -647,6 +709,70 @@
         <button class="pd-btn" @click="foodEdit.open = false">取消</button>
         <button class="pd-btn primary" @click="saveFoodEdit()">保存</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===================== 弹窗：AI 导入食物 ===================== -->
+  <div v-if="aiImport.open" class="pd-mask" @click.self="closeAiImport()">
+    <div class="pd-modal pd-modal-wide">
+      <div class="pd-modal-title"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 导入食物</div>
+
+      <template v-if="!aiImport.done">
+        <!-- 步骤 1：填名 → 复制 Prompt -->
+        <div class="pd-ai-step"><b>1</b> 想加什么食物？填进去，然后复制 Prompt 去问 AI</div>
+        <label class="pd-fld wide">
+          <span>食物名称（可以带做法或份量，如「水煮鸡蛋」「半个香蕉」）</span>
+          <input v-model="aiImport.name" placeholder="如：鹌鹑蛋">
+        </label>
+        <div class="pd-ai-prompt">{{ aiPromptText }}</div>
+        <button class="pd-btn primary" @click="copyPrompt()"><i class="fa-solid fa-copy"></i> 复制 Prompt</button>
+
+        <!-- 步骤 2：粘贴 AI 返回的 JSON -->
+        <div class="pd-ai-step"><b>2</b> 把 AI 返回的内容整段粘进来</div>
+        <textarea class="pd-ai-input" v-model="aiImport.json" rows="6"
+                  placeholder="把 AI 返回的内容整段粘贴到这里（带 ```json 围栏也没关系）"></textarea>
+        <div class="pd-ai-ops">
+          <button class="pd-btn" @click="closeAiImport()">取消</button>
+          <button class="pd-btn primary" @click="parseAiJson()"><i class="fa-solid fa-check"></i> 解析并预览</button>
+        </div>
+
+        <div v-if="aiImport.error" class="pd-ai-err"><i class="fa-solid fa-triangle-exclamation"></i> {{ aiImport.error }}</div>
+
+        <!-- 步骤 3：预览确认 -->
+        <template v-if="aiImport.preview">
+          <div class="pd-ai-step"><b>3</b> 确认后入库，并自动放进常用</div>
+          <div class="pd-ai-prev">
+            <div class="pd-ai-prev-head">
+              <b>{{ aiImport.preview.food.name }}</b>
+              <span class="pd-ai-cat">{{ catName(aiImport.preview.food.cat) }}</span>
+            </div>
+            <div class="pd-ai-line">
+              每 100g（{{ aiImport.preview.food.base === 'raw' ? '生重' : '熟重' }}）：
+              蛋白 {{ r1(aiImport.preview.food.n.p) }} · 脂肪 {{ r1(aiImport.preview.food.n.f) }} ·
+              碳水 {{ r1(aiImport.preview.food.n.c) }} · 纤维 {{ r1(aiImport.preview.food.n.fiber) }} ·
+              <b>{{ r0(aiImport.preview.food.n.kcal) }} kcal</b>
+            </div>
+            <div class="pd-ai-line">
+              折算比 yield：{{ aiImport.preview.food.yield }}<template v-if="aiImport.preview.food.yield !== 1">
+              （100g 生 ≈ {{ r0(100 * aiImport.preview.food.yield) }}g 熟）</template>
+            </div>
+            <div class="pd-ai-line">
+              计量单位：
+              <span v-for="u in aiImport.preview.food.units" :key="u.k" class="pd-ai-unit">
+                1 {{ u.label }} = {{ u.g }} g<template v-if="u.state">（{{ u.state === 'raw' ? '生' : '熟' }}）</template>
+              </span>
+            </div>
+            <div v-if="aiImport.preview.food.note" class="pd-ai-note">{{ aiImport.preview.food.note }}</div>
+            <div v-for="(w, i) in aiImport.preview.warns" :key="i" class="pd-ai-warn">{{ w }}</div>
+          </div>
+          <button class="pd-btn primary" @click="confirmAiImport()"><i class="fa-solid fa-plus"></i> 确认加入食物库</button>
+        </template>
+      </template>
+
+      <template v-else>
+        <div class="pd-ai-done"><i class="fa-solid fa-circle-check"></i> 已加入食物库，并放进常用展区</div>
+        <div class="pd-modal-ops"><button class="pd-btn primary" @click="closeAiImport()">完成</button></div>
+      </template>
     </div>
   </div>
 

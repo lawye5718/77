@@ -13,6 +13,9 @@
   --pd-acc: #10B981;
 }
 * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+/* 原版本把 .hidden 交给 Tailwind CDN 提供；断网或 CDN 不可达时两个 file input 会直接暴露在页面上。
+   这里收回自持，彻底去掉对 Tailwind 的依赖（全站样式本就在 style.css 内）。 */
+.hidden { display: none !important; }
 html, body {
   margin: 0; padding: 0; background: var(--pd-bg);
   color: var(--pd-tx); min-height: 100dvh;
@@ -110,11 +113,10 @@ input, select, textarea { font-size: 16px !important; }
 .pd-recon b { color: #fff; }
 
 /* ---------- 环形 ---------- */
-.pd-rings {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px;
-}
-@media (max-width: 420px) { .pd-rings { grid-template-columns: repeat(2, 1fr); } }
+/* 7 个环形用 flex 自适应：固定 4 栏会让第二行只剩 3 个、右侧空一块 */
+.pd-rings { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .pd-ring {
+  flex: 1 1 84px; min-width: 76px;
   background: var(--pd-card); border: 1px solid var(--pd-bd); border-radius: 18px;
   padding: 10px 6px 9px; text-align: center;
 }
@@ -177,9 +179,10 @@ input, select, textarea { font-size: 16px !important; }
 .pd-sop-item.done b { text-decoration: line-through; opacity: 0.75; }
 
 /* ---------- Tab ---------- */
-.pd-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 10px; }
+/* 六个页签必须六栏：原先 repeat(5,1fr) 会把「设置」挤到第二行并只占 1/5 宽 */
+.pd-tabs { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-bottom: 10px; }
 .pd-tab {
-  padding: 9px 2px; border-radius: 13px; font-size: 11.5px; font-weight: 800;
+  padding: 9px 1px; border-radius: 13px; font-size: 11px; font-weight: 800;
   background: rgba(255, 255, 255, 0.05); border: 1px solid var(--pd-bd); color: var(--pd-sub);
 }
 .pd-tab.act { background: rgba(16, 185, 129, 0.2); border-color: var(--pd-acc); color: #fff; }
@@ -292,10 +295,15 @@ input, select, textarea { font-size: 16px !important; }
 .pd-mask {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(8px);
   display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 60;
+  /* 触底/触顶后不再把滚动「甩」给底层页面（iOS 橡皮筋连带的另一半原因） */
+  overscroll-behavior: contain;
 }
 .pd-modal {
   width: 100%; max-width: 420px; background: #101A2C; border: 1px solid var(--pd-bd);
   border-radius: 22px; padding: 16px;
+  /* 小屏上弹窗可能比视口还高：不加这个，超出部分既看不见也滚不到 */
+  max-height: 86dvh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .pd-modal-title { font-size: 14px; font-weight: 900; color: #fff; margin-bottom: 12px; }
 .pd-grid5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
@@ -303,6 +311,73 @@ input, select, textarea { font-size: 16px !important; }
 .pd-grid5 input { padding: 7px 4px !important; text-align: center; font-size: 12px !important; }
 .pd-modal-ops { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .pd-modal-ops .pd-btn { margin: 0; }
+
+/* ---------- AI 导入食物 ---------- */
+.pd-modal-wide { max-width: 520px; max-height: 86dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.pd-lib-actions { display: flex; gap: 8px; margin-bottom: 6px; }
+.pd-lib-actions .pd-btn { flex: 1; margin: 0; text-align: center; }
+.pd-lib-tip { font-size: 10px; color: var(--pd-sub); font-weight: 600; line-height: 1.5; margin-bottom: 10px; }
+.pd-ai-step {
+  display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 800; color: #fff;
+  margin: 12px 0 7px;
+}
+.pd-ai-step:first-child { margin-top: 0; }
+.pd-ai-step b {
+  flex: none; width: 18px; height: 18px; border-radius: 6px; font-size: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #10B981, #06B6D4); color: #fff;
+}
+/* Prompt 原文：等宽 + 允许横向滚动，保证换行不被浏览器吃掉 */
+.pd-ai-prompt {
+  max-height: 180px; overflow: auto; -webkit-overflow-scrolling: touch;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--pd-bd); border-radius: 12px;
+  padding: 9px 10px; margin: 8px 0; font-size: 10.5px; line-height: 1.6;
+  color: var(--pd-sub); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+.pd-ai-input {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--pd-bd); border-radius: 12px;
+  padding: 9px 10px; color: var(--pd-tx);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.55;
+}
+.pd-ai-input:focus { outline: none; border-color: var(--pd-acc); }
+.pd-ai-ops { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.pd-ai-ops .pd-btn { margin: 0; }
+.pd-ai-err {
+  display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; padding: 9px 10px;
+  border-radius: 12px; font-size: 11px; font-weight: 700; line-height: 1.5;
+  background: rgba(244, 63, 94, 0.14); border: 1px solid rgba(244, 63, 94, 0.38); color: #FDA4AF;
+}
+.pd-ai-err i { margin-top: 2px; }
+.pd-ai-prev {
+  background: rgba(16, 185, 129, 0.10); border: 1px solid rgba(16, 185, 129, 0.32);
+  border-radius: 14px; padding: 10px 11px; margin: 8px 0;
+}
+.pd-ai-prev-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pd-ai-prev-head b { font-size: 13.5px; font-weight: 900; color: #fff; }
+.pd-ai-cat {
+  font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 999px;
+  background: rgba(16, 185, 129, 0.22); border: 1px solid rgba(16, 185, 129, 0.45); color: #6EE7B7;
+}
+.pd-ai-line { font-size: 11px; font-weight: 700; color: var(--pd-tx); line-height: 1.7; }
+.pd-ai-line b { color: #7DD3FC; }
+.pd-ai-unit {
+  display: inline-block; margin: 3px 5px 0 0; padding: 3px 8px; border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid var(--pd-bd);
+  font-size: 10px; font-weight: 700; color: var(--pd-tx);
+}
+.pd-ai-note { font-size: 10.5px; color: var(--pd-sub); font-weight: 600; line-height: 1.55; margin-top: 6px; }
+.pd-ai-warn {
+  margin-top: 6px; padding: 7px 9px; border-radius: 10px; font-size: 10.5px; font-weight: 700; line-height: 1.5;
+  background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.34); color: #FCD34D;
+}
+.pd-ai-done {
+  display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800;
+  padding: 14px 12px; border-radius: 14px;
+  background: rgba(16, 185, 129, 0.14); border: 1px solid rgba(16, 185, 129, 0.40); color: #6EE7B7;
+}
+.pd-ai-done i { font-size: 16px; }
 
 /* ---------- 头像 ---------- */
 .pd-avatar-btn {
@@ -435,6 +510,7 @@ input, select, textarea { font-size: 16px !important; }
   position: fixed; inset: 0; z-index: 90;
   background: rgba(0, 0, 0, 0.88); backdrop-filter: blur(10px);
   display: flex; align-items: center; justify-content: center; padding: 18px;
+  overscroll-behavior: contain;
 }
 .pd-cheer-card {
   position: relative; width: 100%; max-width: 340px;
@@ -488,9 +564,13 @@ input, select, textarea { font-size: 16px !important; }
 .pd-today-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; cursor: pointer; border-top: 1px solid var(--pd-bd); }
 .pd-today-row span { flex: 1; text-align: right; font-size: 12px; opacity: .8; }
 .pd-today-pending { opacity: .75; }
-.pd-today-row em { color: #b45309; font-size: 11px; font-style: normal; }
-.pd-import-action { padding: 4px 7px; font-size: 11px; white-space: nowrap; }
-.pd-import-confirm { color: #15803d; }
+.pd-today-row em { color: #FCD34D; font-size: 11px; font-style: normal; }
+.pd-import-action {
+  padding: 4px 7px; font-size: 11px; white-space: nowrap;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  border-radius: 9px; color: var(--pd-tx); font-weight: 800;
+}
+.pd-import-confirm { color: #86EFAC; border-color: rgba(16, 185, 129, 0.45); }
 .pd-yday { float: right; font-size: 12px; }
 
 /* ============================================================
@@ -622,3 +702,96 @@ input, select, textarea { font-size: 16px !important; }
 .pd-split-leg i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 .pd-split-leg b { color: var(--pd-tx); font-weight: 900; }
 .pd-split-leg span { opacity: 0.75; }
+
+/* ============================================================
+ * 2026-10-10 v5：保存状态条 / 常用食物展区 / 可展开分区 /
+ * 待确认块 / 已摄入按单位改量
+ * ============================================================ */
+
+/* ---------- 保存状态条 ---------- */
+.pd-savebar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--pd-bd);
+  font-size: 9.5px; font-weight: 700; color: var(--pd-sub); line-height: 1.4;
+}
+.pd-savebar i { color: var(--pd-acc); font-size: 11px; }
+.pd-savebar b { color: #A7F3D0; font-size: 10px; font-weight: 900; }
+.pd-savebar span { flex: 1; min-width: 140px; }
+
+/* 脏数据体检：红色横幅里的清理按钮 */
+.pd-bad-fix {
+  margin-left: auto; flex: none; padding: 5px 10px; border-radius: 9px;
+  background: rgba(244, 63, 94, 0.22); border: 1px solid rgba(244, 63, 94, 0.55);
+  color: #FECDD3; font-size: 11px; font-weight: 900; white-space: nowrap;
+}
+
+/* ---------- 常用食物展区 ---------- */
+.pd-common { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+@media (max-width: 380px) { .pd-common { grid-template-columns: 1fr; } }
+.pd-common-card {
+  position: relative; background: var(--pd-card);
+  border: 1px solid var(--pd-bd); border-radius: 14px; overflow: hidden;
+}
+.pd-common-card.pd-food-in { border-color: rgba(16, 185, 129, 0.55); background: rgba(16, 185, 129, 0.14); }
+.pd-common-hit {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 9px 10px; background: none; border: none; color: var(--pd-tx);
+}
+.pd-common-hit:active { background: rgba(16, 185, 129, 0.16); }
+.pd-common-hit b { font-size: 12.5px; font-weight: 900; }
+.pd-common-hit span { font-size: 9.5px; font-weight: 700; color: #7DD3FC; }
+.pd-common-card.pd-food-in .pd-common-hit span { color: #A7F3D0; }
+.pd-common-x {
+  position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 8px;
+  background: rgba(244, 63, 94, 0.20); border: 1px solid rgba(244, 63, 94, 0.5); color: #FDA4AF;
+  font-size: 11px; display: flex; align-items: center; justify-content: center;
+}
+.pd-common-ops { display: flex; align-items: center; gap: 7px; margin: 6px 0 10px; }
+.pd-common-ops span { flex: 1; font-size: 9.5px; color: var(--pd-sub); font-weight: 600; line-height: 1.4; }
+.pd-common-ops .pd-mini { flex: none; }
+
+/* ---------- 搜索行 / 展开全部 ---------- */
+.pd-searchline { position: relative; display: flex; align-items: center; }
+.pd-searchline .pd-search { padding-right: 38px; }
+.pd-search-x {
+  position: absolute; right: 6px; width: 28px; height: 28px; border-radius: 9px;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid var(--pd-bd); color: var(--pd-sub); font-size: 12px;
+}
+.pd-more {
+  display: block; width: 100%; padding: 8px; border-radius: 11px; margin-top: 2px;
+  background: rgba(255, 255, 255, 0.05); border: 1px dashed var(--pd-bd);
+  color: var(--pd-sub); font-size: 11px; font-weight: 800;
+}
+.pd-more:active { background: rgba(16, 185, 129, 0.14); color: #A7F3D0; }
+
+/* 分类导航吸顶：滑到哪一类都能一键跳 */
+.pd-cats { position: sticky; top: 0; z-index: 20; padding: 6px 0;
+  background: linear-gradient(180deg, rgba(7, 11, 20, 0.96), rgba(7, 11, 20, 0.82));
+  backdrop-filter: blur(8px); }
+
+/* ---------- 待确认块 ---------- */
+.pd-pending {
+  background: rgba(251, 191, 36, 0.10); border: 1px solid rgba(251, 191, 36, 0.34);
+  border-radius: 16px; padding: 10px; margin-bottom: 10px;
+}
+.pd-pending .pd-warn-title { color: #FCD34D; margin-bottom: 6px; }
+.pd-pending-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 7px 0; border-top: 1px solid rgba(251, 191, 36, 0.22);
+}
+.pd-pending-row b { font-size: 12.5px; font-weight: 900; color: var(--pd-tx); }
+.pd-pending-row span { flex: 1; min-width: 90px; font-size: 10px; color: var(--pd-sub); font-weight: 700; }
+
+/* ---------- 已摄入：按单位改量 ---------- */
+.pd-intake-ctl { display: flex; align-items: center; gap: 4px; }
+.pd-intake-count {
+  width: 62px; text-align: center;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 9px; padding: 6px 4px; font-weight: 800; font-size: 13px;
+}
+.pd-intake-unit-sel {
+  max-width: 92px;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid var(--pd-bd);
+  color: var(--pd-tx); border-radius: 9px; padding: 6px 4px; font-weight: 800; font-size: 11px;
+}
+.pd-intake-eq { font-size: 10.5px; font-weight: 800; color: #7DD3FC; white-space: nowrap; }
