@@ -70,55 +70,55 @@ function per100(food, state) {
   return { p: n.p * factor, f: n.f * factor, c: n.c * factor, fiber: n.fiber * factor, kcal: n.kcal * factor };
 }
 
-/* ---------- 目标引擎 ----------
- * 数字锚定以 78kg 为基准，按体重线性缩放。
- * 热量调整（±%）优先由碳水承担，其次脂肪；蛋白质受保护不被动削减。
+/* ---------- 目标引擎重构 (ACSM 2026 / 肾结晶与尿酸保护版) ----------
+ * 1. 蛋白质锁死：1.9 g/kg（不再随日型浮动）
+ * 2. 脂肪死守上限：0.8 g/kg（不做剩余热量的垃圾桶）
+ * 3. 热量按 kcal/kg 系数随体重线性缩放（不能用绝对值，否则小体重用户失真）
+ * 4. 碳水推导填补剩余热量，并设「防酮下限」与「上限熔断」保护尿酸
+ * 5. 热量调整（±%）由碳水承担，蛋白质与脂肪不受影响
  */
 function buildTargets(weight, dayType, adjustPct, override) {
   const W = clamp(Number(weight) || 78, 30, 200);
-  const S = W / 78;
-  const isRest = dayType === 'rest';
-  const heavy = dayType === 'lower';
 
-  let coef, refs, nutT, fruitT;
-  if (isRest) {
-    coef = { c: 1.7, p: 1.8, f: 0.90 };
-    refs = { carb: [100, 130], protein: [130, 140], fat: [60, 70], net: [60, 90], kcal: [1700, 1850] };
-    nutT = 30; fruitT = 150;
-  } else {
-    coef = heavy ? { c: 4.5, p: 2.3, f: 0.65 } : { c: 4.0, p: 2.0, f: 0.50 };
-    refs = { carb: [310, 350], protein: [160, 180], fat: [40, 50], net: [280, 320], kcal: [2500, 2700] };
-    nutT = 0; fruitT = 200;
-  }
+  // 1. 锁定两大核心宏量
+  const protein = r0(1.9 * W);
+  const fat = r0(0.8 * W);
 
-  let carb = coef.c * W, protein = coef.p * W, fat = coef.f * W;
-  const baseKcal = carb * 4 + protein * 4 + fat * 9;
-  const targetKcal = baseKcal * (1 + (Number(adjustPct) || 0) / 100);
+  // 2. 根据日型设定热量乘数（kcal/kg）
+  let coefKcal;
+  if (dayType === 'rest') coefKcal = 21.8;
+  else if (dayType === 'upper') coefKcal = 24.8;
+  else if (dayType === 'lower') coefKcal = 25.4;
+  else if (dayType === 'cardio_zone2') coefKcal = 26.0;
+  else if (dayType === 'cardio_hiit') coefKcal = 26.8;
+  else coefKcal = 24.8;
 
-  const carbFloor = isRest ? 40 : 150;
-  const carbCeil = isRest ? 2.5 * W : 6.0 * W;
-  const fatFloor = 0.5 * W, fatCeil = 1.2 * W;
+  const baseTargetKcal = r0(coefKcal * W);
+  const targetKcal = baseTargetKcal * (1 + (Number(adjustPct) || 0) / 100);
 
-  let delta = targetKcal - baseKcal;
+  // 3. 碳水推导与安全熔断
+  let carb = (targetKcal - (protein * 4) - (fat * 9)) / 4;
+  const carbFloor = dayType === 'rest' ? Math.max(130, 1.5 * W) : Math.max(180, 2.1 * W);
+  const carbCeil = 6.0 * W;
   let unmet = 0;
-  if (delta < -0.5) {
-    const cut = Math.min(Math.max(0, carb - carbFloor), (-delta) / 4); carb -= cut; delta += cut * 4;
-    if (delta < -0.5) { const cf = Math.min(fat - fatFloor, (-delta) / 9); fat -= cf; delta += cf * 9; }
-    unmet = -delta;
-  } else if (delta > 0.5) {
-    const add = Math.min(Math.max(0, carbCeil - carb), delta / 4); carb += add; delta -= add * 4;
-    if (delta > 0.5) { const af = Math.min(fatCeil - fat, delta / 9); fat += af; delta -= af * 9; }
-    unmet = delta;
-  }
-  if (carb < carbFloor) carb = carbFloor;
-  if (fat < fatFloor) fat = fatFloor;
 
-  let kcal = carb * 4 + protein * 4 + fat * 9;
+  if (carb < carbFloor) {
+    // 防酮红线：宁可热量缺口不落地，也不让碳水跌破下限（生酮会竞争尿酸排泄）
+    unmet = (carbFloor - carb) * 4;
+    carb = carbFloor;
+  } else if (carb > carbCeil) {
+    // 上限熔断：+20% 之类的正向调整不该变成「暴食碳水」
+    unmet = (carb - carbCeil) * 4;
+    carb = carbCeil;
+  }
+
+  // 计算最终真实热量
+  const kcal = r0(carb * 4 + protein * 4 + fat * 9);
 
   const t = {
-    protein: r0(protein), carb: r0(carb), fat: r0(fat), kcal: r0(kcal),
-    vege: 500, fruit: fruitT, nut: nutT,
-    net: [r0(refs.net[0] * S), r0(refs.net[1] * S)]
+    protein, carb: r0(carb), fat, kcal,
+    vege: 500, fruit: dayType === 'rest' ? 150 : 200, nut: dayType === 'rest' ? 20 : 0,
+    net: [r0(carb * 0.8), r0(carb * 0.9)]
   };
   if (override && typeof override === 'object') {
     ['protein', 'carb', 'fat', 'kcal', 'vege', 'fruit', 'nut'].forEach(k => {
@@ -126,11 +126,13 @@ function buildTargets(weight, dayType, adjustPct, override) {
     });
   }
 
+  // 4. 参考区间以「纠偏后的真实 kcal」为中轴：碳水触底/触顶时不再误报 recon.off，
+  //    未落地的部分改由 unmet 提示，两条信息各司其职。
   const refScaled = {
-    carb: [r0(refs.carb[0] * S), r0(refs.carb[1] * S)],
-    protein: [r0(refs.protein[0] * S), r0(refs.protein[1] * S)],
-    fat: [r0(refs.fat[0] * S), r0(refs.fat[1] * S)],
-    kcal: [r0(refs.kcal[0] * S), r0(refs.kcal[1] * S)]
+    carb: [r0(carbFloor), r0(carbFloor + 50)],
+    protein: [protein - 10, protein + 10],
+    fat: [fat - 5, fat + 10],
+    kcal: [kcal - 100, kcal + 100]
   };
 
   const kcalLo = refScaled.kcal[0], kcalHi = refScaled.kcal[1];
@@ -138,7 +140,8 @@ function buildTargets(weight, dayType, adjustPct, override) {
   const diff = kcal < kcalLo ? kcalLo - kcal : (kcal > kcalHi ? kcal - kcalHi : 0);
 
   return {
-    t, refScaled, baseKcal: r0(baseKcal), unmet: r0(unmet), W, isRest, heavy,
+    t, refScaled, baseKcal: r0(baseTargetKcal), unmet: r0(unmet), W,
+    isRest: dayType === 'rest', heavy: dayType === 'lower',
     recon: { off, diff: r0(diff), dir: kcal < kcalLo ? 'low' : (kcal > kcalHi ? 'high' : 'ok') }
   };
 }
@@ -249,7 +252,7 @@ function buildWarnings(totals, t, dayType, items, foodMap, unmet, periMeals) {
     if (totals.f > t.fat * 1.1) w.push({ lv: 'red', t: '脂肪超上限', d: '已达 ' + r0(totals.f) + ' g / 目标 ' + t.fat + ' g。高胰岛素环境下多余脂肪会被直接储存。' });
   } else {
     const fast = (items || []).filter(it => { const f = foodMap[it.foodId]; return f && (f.tags || []).indexOf('fastcarb') >= 0; });
-    if (fast.length) w.push({ lv: 'red', t: '休息日禁区：快碳', d: '检测到 ' + fast.map(x => x.name).join('、') + '。低胰岛素环境是恢复敏感度的前提，请改红薯/南瓜/蓝莓。' });
+    if (fast.length) w.push({ lv: 'amber', t: '休息日碳水建议：优选粗粮', d: '检测到 ' + fast.map(x => x.name).join('、') + '。为保护尿酸，休息日也要吃够 ' + r0(t.carb) + ' g 碳水，但请尽量从燕麦、红薯、南瓜中获取以平稳血糖。' });
     const pw = (items || []).find(it => it.foodId === 'protein_powder');
     if (pw) w.push({
       lv: 'amber', t: '休息日建议停用乳清',
@@ -400,9 +403,11 @@ createApp({
     const media = ref({ avatars: {}, cheer: null });
 
     const dayTypes = [
-      { k: 'lower', label: '下肢训练', sub: '大重量·取上限' },
-      { k: 'upper', label: '上肢训练', sub: '中等强度·取下限' },
-      { k: 'rest',  label: '休息日',   sub: '低碳·恢复敏感度' }
+      { k: 'lower', label: '下肢日', sub: '深蹲/臀推' },
+      { k: 'upper', label: '上肢日', sub: '肩背充血' },
+      { k: 'cardio_hiit', label: '4×4日', sub: '最高热量' },
+      { k: 'cardio_zone2', label: 'Zone2', sub: '燃脂基准' },
+      { k: 'rest',  label: '纯休息', sub: '低碳不入酮' }
     ];
     const adjustOptions = [-20, -15, -10, -5, 0, 5, 10, 15, 20];
 

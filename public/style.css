@@ -58,7 +58,9 @@ input, select, textarea { font-size: 16px !important; }
 }
 .pd-today { width: auto !important; padding: 0 10px !important; font-size: 11px !important; font-weight: 800 !important; }
 
-.pd-chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0; }
+/* 日型由 3 个扩到 5 个（新增 4×4 / Zone2）：用 auto-fit + 最小宽度，
+   宽屏一行 5 个，窄屏自动换行，不会出现被压扁的两行半格 */
+.pd-chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 6px; margin: 10px 0; }
 .pd-chip {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 8px 4px; border-radius: 14px;

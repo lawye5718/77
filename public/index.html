@@ -94,8 +94,8 @@
     <div class="pd-t"><i>坚果</i><b>{{ targets.nut }} g</b></div>
   </section>
   <div class="pd-ref">
-    {{ dayType === 'rest' ? '休息日 · 低碳中蛋白中高脂' : (dayType === 'lower' ? '下肢大重量 · 取上限' : '上肢中等 · 取下限') }}
-    · 78kg 锚点参考区间 蛋白 {{ refScaled.protein[0] }}-{{ refScaled.protein[1] }} / 碳水 {{ refScaled.carb[0] }}-{{ refScaled.carb[1] }} / 脂肪 {{ refScaled.fat[0] }}-{{ refScaled.fat[1] }} g
+    {{ dayType === 'rest' ? '休息日 · 护肾防酮' : '训练日 · 统一 1.9 g/kg 蛋白' }}
+    · 按当前体重参考区间 蛋白 {{ refScaled.protein[0] }}-{{ refScaled.protein[1] }} / 碳水 {{ refScaled.carb[0] }}-{{ refScaled.carb[1] }} / 脂肪 {{ refScaled.fat[0] }}-{{ refScaled.fat[1] }} g
   </div>
   <div v-if="recon.off" class="pd-recon">
     <i class="fa-solid fa-circle-info"></i>
@@ -503,8 +503,7 @@
       <div class="pd-card-title">身体与周期</div>
       <label class="pd-fld wide"><span>体重（kg）</span>
         <input type="number" step="0.5" inputmode="decimal" v-model.number="weight"></label>
-      <div class="pd-note">蛋白目标按体重折算：{{ dayType === 'rest' ? '休息日 1.8 g/kg' : (dayType === 'lower' ? '下肢日 2.3 g/kg' : '上肢日 2.0 g/kg') }}
-        = {{ targets.protein }} g</div>
+      <div class="pd-note">蛋白目标按体重折算：全天候统一 1.9 g/kg = {{ targets.protein }} g</div>
     </div>
 
     <div class="pd-card">

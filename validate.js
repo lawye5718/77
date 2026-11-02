@@ -221,19 +221,37 @@ try {
 
   const lower = bt(78, 'lower', 0, null);
   ok('下肢日(78kg): 蛋白' + lower.t.protein + ' 碳水' + lower.t.carb + ' 脂肪' + lower.t.fat + ' 热量' + lower.t.kcal);
-  if (lower.t.protein !== 179) bad('下肢日蛋白应为 179 (2.3×78)，实为 ' + lower.t.protein);
-  if (lower.t.carb !== 351) bad('下肢日碳水应为 351 (4.5×78)，实为 ' + lower.t.carb);
-  if (lower.t.kcal < 2500 || lower.t.kcal > 2700) bad('下肢日热量 ' + lower.t.kcal + ' 越出 2500-2700');
-  else ok('下肢日热量落在原表参考区间内');
+  // 口径说明：v6.2 起引擎换成「ACSM 2026 / 肾结晶与尿酸保护版」——
+  // 蛋白锁 1.9 g/kg、脂肪锁 0.8 g/kg、热量按 kcal/kg 系数随体重缩放，
+  // 碳水为剩余热量推导值（不再用原表的 2.3/2.0 g/kg 与 2500-2700 绝对值口径）。
+  if (lower.t.protein !== 148) bad('下肢日蛋白应为 148 (1.9×78)，实为 ' + lower.t.protein);
+  if (lower.t.carb !== 208) bad('下肢日碳水应为 208（(25.4×78 - 148×4 - 62×9)/4），实为 ' + lower.t.carb);
+  if (lower.t.kcal < 1950 || lower.t.kcal > 2050) bad('下肢日热量 ' + lower.t.kcal + ' 越出 1950-2050');
+  else ok('下肢日热量按体重缩放正确（25.4 kcal/kg）');
 
   const upper = bt(78, 'upper', 0, null);
   ok('上肢日(78kg): 蛋白' + upper.t.protein + ' 碳水' + upper.t.carb + ' 脂肪' + upper.t.fat + ' 热量' + upper.t.kcal);
-  if (upper.t.protein !== 156) bad('上肢日蛋白应为 156 (2.0×78)，实为 ' + upper.t.protein);
+  if (upper.t.protein !== 148) bad('上肢日蛋白应为 148 (1.9×78)，实为 ' + upper.t.protein);
 
   const rest = bt(78, 'rest', 0, null);
   ok('休息日(78kg): 蛋白' + rest.t.protein + ' 碳水' + rest.t.carb + ' 脂肪' + rest.t.fat + ' 热量' + rest.t.kcal);
-  if (rest.t.kcal < 1700 || rest.t.kcal > 1850) bad('休息日热量 ' + rest.t.kcal + ' 越出 1700-1850');
-  else ok('休息日热量落在原表参考区间内');
+  if (rest.t.kcal < 1650 || rest.t.kcal > 1750) bad('休息日热量 ' + rest.t.kcal + ' 越出 1650-1750');
+  else ok('休息日热量按体重缩放正确（21.8 kcal/kg）');
+
+  // 有氧日（v6.2 新增）应落在 上肢 与 4×4 之间，且 4×4 最高
+  const z2 = bt(78, 'cardio_zone2', 0, null);
+  const hiit = bt(78, 'cardio_hiit', 0, null);
+  if (!(hiit.t.kcal > lower.t.kcal && lower.t.kcal > upper.t.kcal)) bad('日型热量序应为 4×4 > 下肢 > 上肢');
+  else if (!(z2.t.kcal > lower.t.kcal && hiit.t.kcal > z2.t.kcal)) bad('Zone2 应介于下肢与 4×4 之间');
+  else ok('五种日型热量序正确：上肢 ' + upper.t.kcal + ' < 下肢 ' + lower.t.kcal + ' < Zone2 ' + z2.t.kcal + ' < 4×4 ' + hiit.t.kcal);
+  if (hiit.t.protein !== 148) bad('4×4 日蛋白也应为 148（蛋白不再随日型浮动）');
+
+  // 碳水防酮下限：-20% 时热量缺口不得把碳水压到红线以下
+  const restCut = bt(78, 'rest', -20, null);
+  if (restCut.t.carb < 130) bad('休息日 -20% 时碳水跌破防酮下限 130 g，实为 ' + restCut.t.carb);
+  else ok('休息日 -20%：碳水守住防酮下限 ' + restCut.t.carb + ' g，未落地 ' + restCut.unmet + ' kcal 改由 unmet 提示');
+  if (restCut.recon.off) bad('碳水触底时 recon 不应误报偏离（参考区间已跟随后真实 kcal）');
+  else ok('碳水触底未触发 recon 误报');
 
   // 热量调整：蛋白质必须受保护
   const d10 = bt(78, 'rest', -10, null);
@@ -541,13 +559,20 @@ try {
   const fx = R.fixList.value;
   if (!fx.length) bad('应生成补缺口建议');
   else {
+    // v6.2：蛋白锁 1.9 g/kg（78kg → 148 g，低于旧引擎的 179 g），
+    // 前面已录入的条目可能已把蛋白吃达标——此时应当「不再给建议」，而不是报失败。
+    const pGap = R.targets.value.protein - R.totals.value.p;
     const p = fx.find(x => x.key === 'protein');
-    if (!p) bad('缺少蛋白质补缺口建议');
-    else ok('补缺口建议：蛋白质还差 ' + p.gap + ' g → ' + p.options.map(o => o.label + ' ' + o.grams + 'g').join(' / '));
+    if (pGap > 1 && !p) bad('蛋白还差 ' + Math.round(pGap) + ' g 却没有补缺口建议');
+    else if (pGap <= 1 && p) bad('蛋白已达标（' + R.targets.value.protein + ' g）却仍给出补缺口建议');
+    else if (p) ok('补缺口建议：蛋白质还差 ' + p.gap + ' g → ' + p.options.map(o => o.label + ' ' + o.grams + 'g').join(' / '));
+    else ok('蛋白已达标（' + Math.round(R.totals.value.p) + '/' + R.targets.value.protein + ' g），正确不再给补缺口建议');
     // v3：awayOnly（可见脂肪）在训练日仍可推荐，由餐次保护避开围训练期
     const awayIds = ['salmon', 'almond', 'walnut', 'avocado', 'cheese'];
-    const awayShown = p.options.filter(o => awayIds.indexOf(o.id) >= 0);
-    ok('awayOnly 可见脂肪项在训练日仍可推荐' + (awayShown.length ? '：' + awayShown.map(o => o.label).join('、') : '（本缺口下未进入前四）'));
+    const awayShown = p ? p.options.filter(o => awayIds.indexOf(o.id) >= 0) : [];
+    ok('awayOnly 可见脂肪项在训练日仍可推荐'
+      + (p ? (awayShown.length ? '：' + awayShown.map(o => o.label).join('、') : '（本缺口下未进入前四）')
+           : '（蛋白已达标，未生成该组建议）'));
     const veg = fx.find(x => x.key === 'vege');
     const vegOption = veg && veg.options.find(o => o.id === 'dark_vege');
     if (!vegOption || vegOption.grams !== veg.gap || vegOption.covers !== veg.gap || vegOption.partial)
@@ -565,18 +590,22 @@ try {
     if (fxRest && fxRest.options.some(o => o.id === 'protein_powder')) bad('休息日不应推荐蛋白粉（trainOnly）');
     else ok('休息日补缺口已排除蛋白粉（trainOnly）');
     R.dayType.value = 'lower';
+    // v6.2 蛋白锁 1.9 g/kg（78kg → 148 g）：前面测试累积录入的条目已把蛋白吃超标，
+    // 补缺口分组会自然消失。这里清空当日条目，让「训练日应给建议 / 降序 / 一顿上限」
+    // 这几条断言继续保有覆盖（顺带也让下面的一键补缺口有可用选项）。
+    R.day.value.items.splice(0, R.day.value.items.length);
     const fxTrain = R.fixList.value.find(x => x.key === 'protein');
     if (!fxTrain) bad('训练日应给出蛋白补缺口建议');
     else ok('训练日补缺口：' + fxTrain.options.map(o => o.label + ' ' + o.grams + 'g').join(' / '));
-    const sorted = p.options.every((o, i) => i === 0 || p.options[i - 1].covers >= o.covers);
+    const sorted = fxTrain.options.every((o, i) => i === 0 || fxTrain.options[i - 1].covers >= o.covers);
     if (!sorted) bad('推荐应按实际贡献降序（最管用的排前）');
-    else ok('推荐按贡献降序：' + p.options.map(o => o.label + ' ' + o.grams + 'g(补' + o.covers + ')').join(' / '));
-    const crazy = p.options.some(o => o.grams > 500);
-    if (crazy) bad('存在一顿吃不完的推荐量: ' + p.options.map(o => o.label + o.grams).join(','));
+    else ok('推荐按贡献降序：' + fxTrain.options.map(o => o.label + ' ' + o.grams + 'g(补' + o.covers + ')').join(' / '));
+    const crazy = fxTrain.options.some(o => o.grams > 500);
+    if (crazy) bad('存在一顿吃不完的推荐量: ' + fxTrain.options.map(o => o.label + o.grams).join(','));
     else ok('推荐量均不超过一顿上限（补剂 60 g / 常规 500 g）');
-    const pw = p.options.find(o => o.id === 'protein_powder');
+    const pw = fxTrain.options.find(o => o.id === 'protein_powder');
     if (pw && pw.grams > 60) bad('蛋白粉推荐量超过 60 g 上限');
-    const part = p.options.filter(o => o.partial);
+    const part = fxTrain.options.filter(o => o.partial);
     if (part.length) ok('缺口过大时按上限给并标注实际贡献：' + part.map(o => o.label + ' ' + o.grams + 'g 补 ' + o.covers).join('、'));
     else ok('所有推荐均可一次补齐缺口');
   }
